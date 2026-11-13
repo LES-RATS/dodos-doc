@@ -1,0 +1,144 @@
+package os:core@0.1.0;
+
+interface types {
+  variant error {
+    revoked,
+    gone,
+    denied,
+    invalid(string),
+  }
+  flags rights { read, write, share }
+  enum effect { read, reversible, irreversible, external }
+}
+
+interface store {
+  use types.{error, rights};
+
+  resource object {
+    id: func() -> string;
+    size: async func() -> result<u64, error>;
+    /// Small reads and writes by value. Large ones go through the stream
+    /// variants (ABI rule 6).
+    read: async func(offset: u64, len: u64) -> result<list<u8>, error>;
+    write: async func(offset: u64, data: list<u8>) -> result<_, error>;
+    read-via-stream: func(offset: u64) -> tuple<stream<u8>, future<result<_, error>>>;
+    write-via-stream: async func(offset: u64, data: stream<u8>) -> result<_, error>;
+    attenuate: func(keep: rights) -> result<object, error>;
+  }
+
+  resource collection {
+    open: async func(name: string) -> result<object, error>;
+    create: async func(name: string) -> result<object, error>;
+    query: async func(filter: string) -> result<list<object>, error>;
+    remove: async func(name: string) -> result<_, error>;
+  }
+}
+
+interface ui {
+  use types.{error};
+  use store.{object};
+
+  /// The interface tree is a flat list of nodes linked by ids: WIT has no
+  /// recursive types, and a flat list streams and patches node by node.
+  type node-id = string;
+
+  enum direction { column, row }
+  enum text-style { body, title, heading, caption, code }
+  enum tone { neutral, accent, positive, warning, danger }
+  enum field-kind { line, multiline, number, date, time, secret }
+
+  record text { content: string, style: text-style, markdown: bool }
+  record image { source: object, alt: string }
+  record table { columns: list<string>, rows: list<list<string>> }
+  record choice-option { value: string, label: string }
+
+  /// An argument is a JSON literal or the current value of an input node.
+  variant source { literal(string), input(node-id) }
+  record argument { name: string, value: source }
+  /// Refers to an action of the task scope. Its effect class is looked up
+  /// by the system, never declared by the tree.
+  record invocation { app: string, name: string, args: list<argument> }
+
+  record button { label: string, tone: tone, action: option<invocation> }
+  record field { label: string, kind: field-kind, value: string }
+  record choice { label: string, options: list<choice-option>, multiple: bool, selected: list<string> }
+  record toggle { label: string, on: bool }
+
+  variant kind {
+    // containers
+    stack(direction),
+    card,
+    items,
+    // content
+    text(text),
+    image(image),
+    icon(string),
+    table(table),
+    progress(option<f32>),
+    divider,
+    // inputs
+    button(button),
+    field(field),
+    choice(choice),
+    toggle(toggle),
+    // embedded
+    preview(object),
+    applet(object),
+  }
+
+  record node { id: node-id, parent: option<node-id>, kind: kind }
+
+  variant event {
+    activated(node-id),
+    changed(tuple<node-id, string>),
+    message(tuple<node-id, string>),
+    dismissed,
+  }
+
+  resource surface {
+    /// Inserts or replaces nodes by id. Children keep arrival order.
+    update: async func(nodes: list<node>) -> result<_, error>;
+    remove: async func(ids: list<node-id>) -> result<_, error>;
+    events: func() -> stream<event>;
+  }
+}
+
+interface actions {
+  use types.{error, effect};
+  use store.{object};
+
+  record action {
+    name: string,
+    description: string,
+    input-schema: string,
+    effect: effect,
+  }
+
+  list-actions: func() -> list<action>;
+  invoke: async func(name: string, input: string, objects: list<object>) -> result<string, error>;
+}
+
+interface tasks {
+  use types.{error};
+  use store.{object};
+  use actions.{action};
+
+  resource task {
+    available: func() -> list<tuple<string, action>>;
+    invoke: async func(app: string, name: string, input: string, objects: list<object>) -> result<string, error>;
+    undo: async func() -> result<_, error>;
+  }
+}
+
+world app {
+  use store.{collection};
+  use ui.{surface};
+  export actions;
+  export start: async func(home: collection, screen: surface);
+}
+
+world agent {
+  use tasks.{task};
+  use ui.{surface};
+  export handle: async func(request: string, scope: task, overlay: surface);
+}
