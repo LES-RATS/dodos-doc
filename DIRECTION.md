@@ -196,6 +196,18 @@ Tout composant du système se redémarre ou se remplace sans redémarrer la mach
 - **Service** : son état durable vit dans le stockage et dans la table de handles persistante. Les clients reçoivent l'erreur `gone` ou se reconnectent, ce que la règle 1 de l'ABI impose déjà de savoir traiter.
 - **Coût** : une pause, pas un blocage. La pause est visible quand il s'agit du disque système ou du GPU.
 
+## Panne et arrêt (proposé)
+
+Principe : l'arrêt et la panne suivent le même chemin (logiciel « crash-only », Candea et Fox 2003, de mémoire). Si l'état sur disque est cohérent à tout instant, éteindre n'a rien à ranger, et la reprise après panne est testée à chaque arrêt.
+
+- **Un composant ou un service tombe** : redémarrage ci-dessus, état repris depuis son instantané.
+- **Coupure de courant** : les blobs sont immuables et la racine du stockage bascule de façon atomique, donc pas de vérification du disque au redémarrage. Les objets modifiables sont versionnés. Les processus sont pris en instantané à intervalle régulier : on perd au plus quelques secondes de saisie. Intervalle à fixer.
+- **Panique du noyau** : arrêt de tous les cœurs, trace écrite dans une zone réservée (région NVMe ou variable UEFI), redémarrage, surfaces rendues depuis les instantanés. On ne tente pas de survivre à un noyau incohérent.
+- **Blocage** : chien de garde matériel armé par le noyau, battement par service surveillé par le gestionnaire.
+- **Boucle de redémarrage** : emplacements A/B/R, retour arrière automatique (déjà aligné).
+- **Boîte noire** : tampon circulaire des dernières secondes de messages par tâche, toujours actif, joint au rapport de panne. Le rapport reste local ; l'agent peut l'expliquer.
+- **Arrêt demandé** : dernier instantané, bascule de la racine, coupure. Les périphériques sont réinitialisés au démarrage, pas à l'arrêt.
+
 ## IOMMU
 
 - Chaque processus pilote reçoit un espace d'adresses d'entrée-sortie, objet du noyau désigné par une capacité. Le périphérique ne peut atteindre par DMA que la mémoire explicitement placée dans cet espace.
@@ -331,6 +343,12 @@ Cibles à calibrer sur la machine de référence, à 120 Hz, mesurées par photo
 | Tampon de sortie audio | ≤ 5 ms |
 | Agent : accusé visuel, puis premier son | ≤ 100 ms, puis ≤ 400 ms |
 | Lancement à froid avec cache | ≤ 200 ms jusqu'à la première image |
+| Démarrage : passage de main du firmware → première image (proposé) | ≤ 1 s |
+| Démarrage : passage de main du firmware → shell utilisable (proposé) | ≤ 2 s |
+| Arrêt : demande → coupure (proposé) | ≤ 1 s |
+| Sortie de veille → première image (proposé) | ≤ 0,5 s |
+
+Démarrage et arrêt : seL4 ne publie pas de banc de démarrage (cherché le 14 novembre 2026 ; seul chiffre voisin, 1,3 s pour une pile de trois processus sur Cortex-A9, article PARseL). L'oracle ne sert donc pas ici ; la référence est Linux, Windows et macOS sur la même machine, à mesurer. Le temps du firmware n'est pas à nous : on le mesure à part, et on publie aussi le total bouton → image. Leviers : une seule image EFI, services lancés au premier usage de leur capacité, code Wasm déjà compilé en cache, vérification des blobs à la lecture, pilotes démarrés en parallèle, shell rendu depuis son instantané. Point long probable : le chargement du firmware du GPU (à mesurer).
 
 ## Portes de surcoût (proposé)
 
@@ -375,7 +393,12 @@ Le mécanisme est dans le noyau, la politique en espace utilisateur.
 - **Dans un processus** : le runtime Wasm ordonne ses tâches asynchrones de façon coopérative ; le noyau ne voit que des threads.
 - **Admission** : créer un contexte de classe image est refusé si la somme des budgets dépasse la période.
 - **Repos** : un cœur sans contexte est mis au repos par son noyau ; le service de placement regroupe la charge pour endormir des cœurs.
-- À concevoir : inversion de priorité sur les services partagés, groupes de cœurs d'un processus multithread, mesure du budget consommé pendant une interruption.
+
+Trois points de conception (proposé, 14 novembre 2026) :
+
+- **Inversion de priorité sur un service partagé.** Le cas : un client de fond est dans le service quand un client de classe image arrive. Quatre règles. (1) Un service a un thread passif par cœur, donc un appel reste sur le cœur de l'appelant et deux cœurs ne s'attendent pas. (2) Prêt : le client qui attend prête son contexte (budget et échéance) à celui qui est servi, jusqu'à ce que le service se libère. (3) Seuil à l'entrée : un appel n'entre que si le budget restant couvre le pire cas déclaré de l'appel (le contrat de latence de la capacité) ; sinon il attend sa recharge dehors. seL4 MCS a ce problème ouvert et le même remède en proposition (RFC-14, seuils de budget sur les endpoints, non fusionné à notre connaissance). (4) Épuisement malgré tout : faute de délai vers le superviseur du service, la requête est annulée, le service revient à son état d'avant. Un service doit donc écrire des requêtes annulables.
+- **Groupe de cœurs d'un processus multithread.** Un processus détient un groupe de cœurs : l'ensemble des cœurs où son espace d'adresses est actif. Les opérations sur l'espace d'adresses (mappage, révocation, invalidation de TLB) ne concernent que ce groupe. Le service de placement agrandit ou réduit le groupe selon la charge ; c'est ici que se branche la structure dynamique. Le budget est une réserve du groupe, où chaque contexte par cœur puise des tranches. Un groupe est d'un seul type de cœur par défaut. Le noyau notifie le runtime du nombre de cœurs qu'il a à l'instant, pour qu'il dimensionne ses threads au lieu de surcharger (idée des scheduler activations, de mémoire). Un thread préempté alors qu'il tient un verrou : celui qui attend lui prête son contexte, par le même mécanisme de prêt que ci-dessus.
+- **Temps passé dans les interruptions.** Les pilotes sont en espace utilisateur : une interruption n'est dans le noyau qu'un acquittement et une notification, de durée bornée. Ce temps est mesuré par horodatage à l'entrée et à la sortie, retiré au thread interrompu et débité au contexte du pilote. Le pilote traite sur son propre contexte ; budget épuisé, sa ligne d'interruption reste masquée jusqu'à la recharge, ce qui borne une tempête d'interruptions. Une complétion d'entrée-sortie est débitée au client dont la requête se termine : la requête porte une tranche de son budget. Les interruptions des périphériques hors classe image sont dirigées vers les cœurs économes ou regroupées en début de période.
 
 ## Communication entre appareils (proposé)
 
@@ -384,7 +407,7 @@ Principe : un autre appareil n'est qu'un détenteur de capacités de plus. Tout 
 - **Identité** : chaque appareil a une clé. L'appairage est un échange de clés par code affiché ou par contact. Les appareils d'une personne forment un cercle, ceux d'un proche reçoivent des capacités limitées.
 - **Transport** : connexion directe chiffrée de bout en bout, adressée par clé et non par adresse IP, avec relais en repli. Candidat : iroh (Rust, 1.0 depuis le 15 juin 2026, QUIC, traversée de NAT, protocole stable). Découverte locale par mDNS et Bluetooth basse consommation.
 - **Ce que cela donne** : presse-papiers et envoi d'objets ; synchronisation (les blobs immuables adressés par hash se synchronisent sans conflit, les objets modifiables par versions) ; déplacement d'une surface en cours (instantané de processus) ; périphériques prêtés (caméra et micro du téléphone, GPU du desktop pour l'agent du portable) ; un seul agent et une seule mémoire sur tous les appareils ; actions invoquées à distance.
-- **Avec les appareils qui ne tournent pas sous DodOS**, le point critique puisque nous n'avons pas de téléphone : (1) l'userland hébergé comme application compagnon sur Android, iOS, Linux, macOS et Windows ; (2) protocoles ouverts existants dès le premier jour : KDE Connect (clients Android et iOS ; notifications, fichiers, presse-papiers) et LocalSend (envoi de fichiers, toutes plateformes, protocole publié) ; (3) le web : WebRTC, clés d'accès entre appareils.
+- **Avec les appareils qui ne tournent pas sous DodOS**, le point critique puisque nous n'avons pas de téléphone : (1) l'userland hébergé comme application compagnon sur Android, iOS, Linux, macOS et Windows ; (2) le web : WebRTC, clés d'accès entre appareils ; (3) KDE Connect et LocalSend seulement comme passerelles facultatives, en composants Wasm, pour qui les a déjà : ce ne sont pas le produit, et ils ne sont bien intégrés nulle part (avis de l'utilisateur, 14 novembre). Le produit est notre protocole et notre application compagnon. Téléphones à bootloader libre : DodOS natif, plus tard. À vérifier : ce que les plateformes ouvrent (Wi-Fi Aware sur iOS, interopérabilité Quick Share et AirDrop ; de mémoire).
 - À étudier : récepteurs AirPlay, Cast et Miracast ; Matter pour la maison ; règles de conflit des objets modifiables ; révocation d'un appareil perdu.
 
 ## Réservoir d'idées (exploration, rien de décidé)
@@ -435,6 +458,26 @@ Un nouvel OS est l'occasion d'explorer. Idées connues ou non ; la nouveauté n'
 - Présence partagée : l'agent et l'utilisateur agissent sur la même surface, l'agent montre ce qu'il fait.
 - Session invitée instantanée : prêter la machine avec un jeu de capacités réduit.
 - Recherche sémantique locale sur tous les objets, avec leur provenance.
+
+Ajouts du 14 novembre :
+
+- Démarrage par instantané : à chaque mise à jour, on fige l'état des services déjà démarrés ; démarrer revient à mapper cette image.
+- Interruptions alignées sur l'image : les périphériques sans urgence ne réveillent un cœur qu'en début de période.
+- Boîte noire par tâche (voir « Panne et arrêt ») : sert aussi à rejouer et à expliquer ce qu'a fait l'agent.
+- Catalogue d'interface par gabarit de surface : le même arbre rendu en bureau, téléphone, télévision, voiture, montre ou voix seule (voir « Déploiement et surfaces »).
+
+## Déploiement et surfaces (proposé)
+
+Ordre : (1) desktop de référence ; (2) portables ; (3) application compagnon sur Android, iOS, Linux, macOS et Windows ; (4) téléphones à bootloader libre ; (5) embarqué, dernière phase. Cet ordre n'était pas écrit dans ce document avant le 14 novembre 2026.
+
+Ce que l'embarqué impose dès maintenant, à coût faible :
+
+- **Noyau** : tout ce qui dépend de x86-64 derrière une couche d'architecture, pour porter vers ARM64 et RISC-V. Cible : processeurs avec MMU ; les microcontrôleurs sans MMU sont hors périmètre.
+- **Wasm** : composants compilés à l'avance, sans compilateur sur l'appareil ; interpréteur en repli.
+- **Configuration** : le système est un hash, donc une image embarquée est un autre hash, avec moins de services. Aucun service ne suppose un écran, un GPU, un clavier ou un agent local.
+- **Interface** : le catalogue décrit le sens (bouton, champ, liste), pas la mise en page. Chaque surface a son gabarit de rendu.
+- **Temps réel** : les contextes d'ordonnancement à budget et échéance conviennent déjà.
+- **Mémoire** : porte « mémoire d'un processus vide » et taille de l'image minimale, à fixer.
 
 ## Matériel de référence
 
@@ -538,6 +581,8 @@ Encore de mémoire, à vérifier avant de s'y appuyer :
 - Variants WIT : un cas ajouté casse la compatibilité.
 - Décodage vidéo matériel dans Ladybird : état inconnu.
 - Noyau livré par Debian 14 : notes de version incohérentes.
+
+- 14 novembre 2026 (suite) : absence de banc de démarrage seL4, cherchée sur le web, pas dans le dépôt sel4bench. RFC-14 de seL4 (seuils de budget) : lue par résumé de recherche, état de fusion non vérifié. Scheduler activations, crash-only, Wi-Fi Aware sur iOS, Quick Share et AirDrop, firmware GPU : de mémoire.
 
 ## Emprunts
 
