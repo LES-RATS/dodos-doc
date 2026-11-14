@@ -60,6 +60,114 @@ Trois raisons d'exister :
 | Jeux | Wasm et cloud uniquement | Décidé |
 | Licence | Double licence : AGPLv3 et commerciale. SDK et bibliothèques liées aux applications sous licence permissive. Pilotes Linux en GPLv2 dans des processus séparés | Décidé |
 
+## Décisions après la revue (14 novembre 2026)
+
+Revue indépendante dans `REVIEW.md` (27 constats). Cette section tranche chaque point. Elle prévaut sur toute ligne plus ancienne qui la contredit ; les lignes touchées portent la marque « Remplacé ». Une passe de nettoyage des lignes remplacées reste à faire. Statuts désormais limités à quatre : Décidé, Aligné, Proposé, Ouvert.
+
+**Machines.** Deux seulement : le desktop de référence et le portable Dell. Le portable sert de machine de contrôle du desktop (alimentation, console, image) tant qu'il n'est pas lui-même cible. Les Mac M5 attendent Asahi ; aucune rétro-ingénierie de notre part. Les essais sur matériel sont donc en série, et QEMU porte l'essentiel.
+
+**Instantané de processus (constat 1).** Version 1 : (a) une application sauve son état elle-même, par deux exports `suspend` et `resume` du monde `app`, vers sa collection `home` ; (b) instantané automatique seulement pour un composant Wasm au repos, après un essai d'une semaine avec Wasmtime ; (c) aucun instantané pour le natif : un service redémarre et recharge son état depuis le stockage ; (d) la pression mémoire et la reprise après panne ne supposent plus l'instantané. L'instantané périodique de tous les processus est reporté après l'alpha. Le déplacement d'une surface entre appareils passe par `suspend` et `resume`, seul chemin qui traverse deux architectures.
+
+**Structure multi-cœur (constats 2 et 6).** La reprise d'un noyau de cœur est dans la version 1 (décision de l'utilisateur). Il en découle :
+
+- Variante retenue : un noyau par cœur, aucun état partagé, messages seulement. « Groupe de cœurs » n'a plus qu'un sens : les noyaux par cœur qui tiennent par messages l'espace d'adresses d'un processus. Le noyau partagé à verrou court et le verrou global ne sont plus que des points de comparaison mesurés sur le même banc.
+- Chaque cœur a sa propre copie de la table de pages d'un processus étalé.
+- Capacités : l'arbre de dérivation traverse les noyaux. La révocation est un protocole réparti en deux phases, avec un modèle formel. C'est aussi le cœur de la « tâche révocable d'un coup ».
+- Invariant de propriété de la mémoire : rien dont dépend un noyau vivant n'est enregistré seulement dans un autre noyau. Tout mappage à distance est inscrit des deux côtés. Un noyau rechargé interroge ses voisins avant de réutiliser une page ; une page au statut inconnu est mise en quarantaine.
+- Ordre de reprise : isoler le cœur, réinitialiser les périphériques dont le pilote y tournait, reprendre la mémoire, recharger le noyau.
+- Le protocole entre noyaux est versionné et compatible d'une version à la suivante, pour le remplacement cœur par cœur.
+- Trois modèles vérifiés par exploration d'états (TLA+ ou équivalent) : révocation entre cœurs, changement de taille d'un groupe, reprise d'un noyau.
+- Un service choisit d'être à un thread ou à un thread par cœur.
+- Fils d'un même cœur physique : en version 1, un noyau par cœur physique et le second fil au repos.
+- Antériorité à citer : Hive (SOSP 1995).
+
+**Vérification du noyau (constats 3 et 11).**
+
+- Le modèle exécutable est l'artefact de la voie contrat : relu par les deux humains, protégé par `CODEOWNERS`, écrit par une autre famille de modèles que l'implémentation. L'agent qui implémente ne peut pas le modifier.
+- À chaque PR : test différentiel de l'implémentation contre le modèle, sur des suites d'appels aléatoires et des entrelacements entre cœurs. seL4 reste un second oracle sur le sous-ensemble commun ; la liste des différences acceptées est un fichier protégé, à cliquet.
+- Chemin rapide en Zig : test d'équivalence, même corpus avec et sans chemin rapide, traces identiques.
+- Verus : les propriétés à prouver sont écrites dans le contrat du noyau (invariants de l'arbre de dérivation, cycle de vie des objets, aucune référence pendante). Les échappatoires (`assume`, `admit`, corps externes) entrent dans les budgets à cliquet. Les humains relisent les spécifications, pas les preuves.
+- Sous QEMU, on compte des instructions, pas des cycles. KVM sur les runners gratuits n'est pas la seule porte.
+- Exploration systématique des entrelacements sur les files sans verrou ; tests de charge sur matériel.
+- Un test d'attaque par frontière (IOMMU, capacités, pages exécutables, service de compilation), qui doit échouer.
+- Test de mutation sur la logique du noyau, à cliquet.
+- Le noyau, son modèle, le harnais de l'oracle et `os:core` vivent dans un seul dépôt : ils forment un composant. « Pas de monorepo » reste vrai pour le reste.
+- Le desktop n'est pas un runner ; le portable le pilote. Runner auto-hébergé sur dépôt privé seulement.
+- Capacité des humains : ils relisent les contrats et les tests de la voie contrat. La voie fonction est relue par des agents d'une autre famille, avec le dépôt en lecture, et un échantillon par un humain. La voie entretien fusionne seule.
+- Portes rapides à chaque fusion ; portes sur matériel la nuit ; une fusion qui casse une porte de nuit est annulée.
+- Rendu logiciel et pilote virtio-gpu, pour tester le compositeur sous QEMU et comme chemin de secours.
+
+**Sécurité de l'agent (constat 4).** À écrire dans la page du modèle de sécurité, avant de figer `core.wit` :
+
+- Chaque action s'exécute dans une instance neuve, qui ne reçoit que les capacités de sa classe.
+- La classe d'effet devient deux champs : modification (aucune, réversible, irréversible) et portée (locale, externe).
+- Les actions et leurs classes sont dans le manifeste signé, pas rendues par une fonction.
+- Une tâche porte deux marques : « a lu du privé » et « a lu du non fiable ». Matrice :
+
+  | Action | Tâche sans marque « non fiable » | Tâche marquée « non fiable » |
+  |---|---|---|
+  | Lecture locale | Automatique | Automatique |
+  | Modification réversible locale | Automatique, annulable | Automatique, annulable |
+  | Modification irréversible locale | Confirmation | Confirmation, provenance affichée |
+  | Lecture externe | Automatique | Automatique sans marque « privé », confirmation sinon |
+  | Modification externe | Confirmation | Confirmation, provenance et contenu exact affichés |
+
+- Sortie d'une action : non fiable par défaut pour toute application tierce. Seuls le système et les données propres de l'utilisateur sont fiables ; un éditeur ne se déclare pas fiable lui-même.
+- Un champ secret n'émet jamais sa valeur vers l'agent ; elle va à l'action directement.
+- L'écran de confirmation est dessiné par le système à partir du schéma typé de l'action, jamais à partir du texte du modèle.
+- Une suite d'attaques par injection devient une porte de la piste hébergée.
+- Étiquettes par valeur plutôt que par tâche (FIDES, RTBAS, IsolateGPT) : à lire, après la version 1.
+- La règle « aucun composant ne cumule » vise les tâches de l'agent ; elle reprend la « triade létale » (Willison) et la « règle de deux » (Meta), à citer.
+
+**Ordre de construction et calendrier (constat 5).** Piste noyau révisée : (1) amorçage de la plate-forme (UEFI, ACPI, PCI, interruptions, minuteurs, démarrage des autres cœurs), capacités, IPC, modèle et oracle à un cœur ; (2) multi-cœur par messages, révocation répartie, reprise d'un noyau, ordonnancement, mémoire, mlibc et bibliothèque standard de Rust, premier service natif, virtio ; (3) IOMMU, pilote NVMe natif, clavier, pile réseau, émulation Linux pour la carte réseau, image serveur ; (4) cœur NVIDIA, NVK, service GPU, USB, audio. L'image serveur est un jalon décidé.
+
+| Semaines (semaine 1 : 16 novembre 2026) | Piste hébergée | Piste noyau | Jalon |
+|---|---|---|---|
+| 1-2 | Étape 0, modèle de sécurité, runtime, `dodo` | Essais : frontière Zig et Rust, noyau sans pile par thread, harnais de l'oracle, cœur NVIDIA hors de Linux ; démarrage sous QEMU | Socle prêt |
+| 3-7 | Surface, actions, agent, confirmations, attaques par injection | Contrats et modèle à un cœur ; capacités, IPC, mémoire de base | Première démonstration publique ; IPC mesuré |
+| 8-17 | Shell, magasin réel, paquets signés, pile réseau hébergée | Multi-cœur, révocation répartie, reprise d'un noyau, ordonnancement, mlibc, Rust std, virtio | Composant `wasi:http` servi sous QEMU ; un noyau tué, la machine continue |
+| 18-26 | Services portés sur la cible | Desktop réel : ACPI, PCI, IOMMU, NVMe, clavier, carte réseau | Image serveur sur le desktop |
+| 27-36 | Dépendances de Ladybird | Cœur NVIDIA, NVK, service GPU, USB, audio | Triangle Vulkan, compositeur réel |
+| 37-48 | Ladybird, portes de latence | Durcissement | Alpha (fin 2027) |
+| 2028 | Portables, application compagnon, communication entre appareils | | Bêta |
+
+Hypothèse à recalculer après la semaine 2. Ce qui borne le rythme : une trentaine de contrats à relire à deux, et une seule machine cible.
+
+**Ordonnancement (constat 7 et mineurs 21, 24).** Un appel asynchrone porte une tranche du budget du client. « Le service n'a pas de temps propre » devient le cas par défaut ; l'audio, les pilotes et le travail de fond du stockage ont leur contexte. Un pilote Linux émulé n'est pas annulable : le dépassement est débité au client sur ses périodes suivantes. Porte ajoutée : appel WIT asynchrone entre deux processus, de bout en bout. Référence de la porte IPC : seL4 MCS, mêmes protections Spectre, mesuré sur notre machine. Budgets comptés en temps ; les cœurs de la classe image tournent en préférence performance. Chaque appel système a une durée bornée, avec points de reprise, vérifiée.
+
+**Mémoire (constat 8).** Le service de mémoire détient les capacités de mémoire et fournit pages et tables au moment d'un défaut ; la réserve de chaque noyau est une avance qu'il lui a remise. Compte à la réservation. Une erreur d'allocation peut arrêter du code natif : « pas de processus tué par surprise » vaut pour le Wasm. Les services de l'image de démarrage sont épinglés en mémoire ; la liste ajoute le gestionnaire de services, le service de mémoire et le service de placement.
+
+**Stockage (constat 9).** Une base SQLite par domaine de clé (machine, chaque utilisateur). Ordre imposé : allouer et valider dans la base de la machine, référencer ensuite, ramasser les fuites ; test par injection de coupures. La déduplication ne traverse pas deux zones chiffrées. Bases des applications sur des fichiers d'extents simples, alloués par gros morceaux. Une porte de débit par type de charge. La cohérence vient du journal de SQLite ; « bascule de racine » ne désigne que le changement d'emplacement système. Le format du magasin reste lisible par la version précédente du système, et c'est testé. Réserve d'espace pour le disque plein, TRIM, copies et sommes de contrôle de la base, point de durabilité (`sync`) dans l'ABI. Bascule A/B par les variables de démarrage UEFI, pas par renommage sur FAT.
+
+**Pilotes Linux (constat 10).** La bibliothèque d'émulation est le code qui fournit aux pilotes Linux les fonctions du noyau Linux qu'ils attendent. Liée à du code GPLv2, elle est publiée sous licence MIT, compatible ; le processus pilote entier est en GPLv2 ; il parle au reste par IPC. À confirmer par le juriste. Lire SUD, LKL et Genode avant de l'écrire. USB : une interface de bus ; le contrôleur dans un processus, les pilotes de classe (natifs d'abord) dans d'autres. Version de Linux : la dernière à support long au démarrage de la couche ; l'annonce sur la 7.3 n'est pas confirmée.
+
+**GPU (constat 13).** Essai de deux semaines en tête de piste : cœur NVIDIA compilé hors de Linux, plans d'affichage, priorités de canaux, llama.cpp sur NVK sous Linux. Le scanout direct reste décidé sous réserve de cet essai. Chemin de secours : compositeur logiciel sur le framebuffer du firmware.
+
+**`core.wit` (constat 12).** Révision complète, premier contrat de l'étape 0 : `suspend` et `resume` ; classe d'effet en deux champs ; actions dans le manifeste ; liste d'erreurs large avec cas de repli ; `sync`, versions, métadonnées, droits détenus, persistance d'un objet reçu ; sélecteur d'objets, glisser-déposer, presse-papiers ; provenance sur objets et résultats ; `start` sans surface obligatoire ; encodage ouvert pour l'arbre d'interface ; formats de chaînes spécifiés. `os:core` demande WASI 0.3 : Rust d'abord, les autres langages quand leurs outils y arrivent.
+
+**Manques (constat 15).**
+
+1. Donner un objet à une application : sélecteur, glisser-déposer et presse-papiers tenus par le shell, qui remettent une capacité atténuée.
+2. Arrière-plan : une capacité déclarée au manifeste ; sans surface, classe fond avec budget ; réveil par un service de notifications ; la lecture audio garde sa classe.
+3. Service de plate-forme : un processus de confiance qui porte uACPI, l'énumération PCI et le routage des interruptions.
+4. TLS dans le service réseau ; racines de confiance livrées comme blob du système.
+5. Éditeurs : une clé racine qui délègue des clés de signature ; révocation distribuée avec les métadonnées TUF ; un nouveau droit à la mise à jour demande l'accord de l'utilisateur.
+6. Entropie : générateur du noyau alimenté par le processeur, les interruptions et le TPM.
+7. Observabilité : journal système, profileur par capacité, débogueur du noyau par le port de débogage USB.
+8. Entrées-sorties : les classes s'appliquent aux files du disque et du réseau ; budgets plus tard.
+9. Affichage : plusieurs écrans, mise à l'échelle par écran, branchement à chaud, dans le contrat du compositeur.
+10. Applications de l'alpha : navigateur, terminal, explorateur d'objets, réglages, éditeur de texte, agent.
+11. Caméra : pilote de classe natif, après l'alpha.
+12. Appels système seulement depuis la page fournie par le noyau, contrôlé à l'entrée.
+
+**Wasm (constat 16).** Les portes sont calibrées avant d'armer le cliquet. Un composant ne mappe pas un blob dans sa mémoire : la copie est acceptée, le cache partagé sert au code et au natif.
+
+**Périmètre (constat 19).** Reportés après l'alpha : instantané périodique, étage optimisé Wasm et porte à 1,2, communication entre appareils et application compagnon, fréquence et cœurs à la demande (en version 1, seulement les préférences par classe), mise à l'échelle d'images, FRED. Deux moteurs de rendu en version 1.
+
+**Communication entre appareils (constat 20).** Modèle : capacités réparties (CapTP, Cap'n Proto), à citer et à lire. Mémoire de l'agent en journal d'ajouts, fusion par union ; objet modifié des deux côtés : les deux versions sont gardées.
+
+**Antériorité (constat 14).** À ajouter aux emprunts et à citer : Singularity, Midori, Hive, Escort, Redline, SUD, LKL, FIDES. Les revendications « aucun noyau trouvé » et « ne semble pas publiée » sont adoucies. Le chiffre de Barrelfish/DC est retiré jusqu'à lecture de l'article.
+
 ## Architecture
 
 ```
@@ -121,7 +229,7 @@ Piste noyau, sur QEMU puis sur le desktop de référence :
 3. IOMMU, cadre de pilotes, couche d'émulation : NVMe, USB, réseau.
 4. Cœur NVIDIA et NVK : un triangle Vulkan.
 
-Convergence : mlibc, bibliothèque standard de Rust sur notre cible, dépendances de Ladybird, compositeur sur scanout réel, portes de latence, puis audio, veille, saisie, accessibilité.
+Convergence : mlibc, bibliothèque standard de Rust sur notre cible, dépendances de Ladybird, compositeur sur scanout réel, portes de latence, puis audio, veille, saisie, accessibilité. **[Remplacé le 14 novembre 2026 : mlibc et la bibliothèque standard de Rust passent à l'étape 2 de la piste noyau ; voir « Décisions après la revue »]**
 
 ## Harnais des agents de développement
 
@@ -421,11 +529,11 @@ Le runtime de la NASA (SpaceWasm, JPL) est un interpréteur Wasm 1.0 conçu pour
 
 Le mécanisme est dans le noyau, la politique en espace utilisateur.
 
-- **Dans chaque noyau de cœur** : une file locale, sans verrou. Un thread ne tourne que s'il détient un contexte d'ordonnancement, objet désigné par une capacité, qui porte un budget, une période, une échéance et une classe de cœur (modèle de seL4 MCS, de mémoire). Le noyau choisit l'échéance la plus proche parmi les contextes qui ont du budget, et ne déplace jamais un thread de lui-même.
-- **Le budget suit l'appel** : quand un client appelle un service, le service tourne sur le budget du client. Un service n'a pas de temps propre, donc il ne peut ni en voler ni être affamé, et le coût d'une tâche de l'agent se compte de bout en bout.
+- **Dans chaque noyau de cœur** : une file locale, sans verrou. Un thread ne tourne que s'il détient un contexte d'ordonnancement, objet désigné par une capacité, qui porte un budget, une période, une échéance et une classe de cœur (modèle de seL4 MCS, de mémoire). Le noyau choisit l'échéance la plus proche parmi les contextes qui ont du budget, et ne déplace jamais un thread de lui-même. **[Remplacé le 14 novembre 2026 : le noyau ne déplace un thread que dans l'ensemble de cœurs autorisé par le service de placement]**
+- **Le budget suit l'appel** : quand un client appelle un service, le service tourne sur le budget du client. Un service n'a pas de temps propre, donc il ne peut ni en voler ni être affamé, et le coût d'une tâche de l'agent se compte de bout en bout. **[Remplacé le 14 novembre 2026 : par défaut seulement ; un appel asynchrone porte une tranche de budget ; certains services ont leur propre contexte ; voir « Décisions après la revue »]**
 - **Service de placement, en espace utilisateur** : il décide quel contexte va sur quel cœur, et demande les migrations par messages. Il connaît les types de cœurs, la charge, la température et l'énergie. Remplaçable sans toucher au noyau (leçon de `sched_ext`).
 - **Classes** : image (entrée, compositeur, audio) sur les cœurs rapides, avec réserve garantie ; interactif ; fond (compilation, indexation, inférence longue) sur les cœurs économes, préempté à chaque période.
-- **Horloge** : pas de tic. Le rafraîchissement de l'écran ouvre chaque période ; un minuteur à échéance couvre le reste.
+- **Horloge** : pas de tic. Le rafraîchissement de l'écran ouvre chaque période ; un minuteur à échéance couvre le reste. **[Remplacé le 14 novembre 2026 : l'écran n'est pas l'horloge du noyau ; la période est un attribut du contexte, le compositeur aligne la sienne sur l'écran ; voir « Décisions après la revue »]**
 - **GPU** : le service GPU applique les mêmes classes aux soumissions, dans le même graphe d'échéances.
 - **Dans un processus** : le runtime Wasm ordonne ses tâches asynchrones de façon coopérative ; le noyau ne voit que des threads.
 - **Admission** : créer un contexte de classe image est refusé si la somme des budgets dépasse la période.
@@ -433,7 +541,7 @@ Le mécanisme est dans le noyau, la politique en espace utilisateur.
 
 Trois points de conception (proposé, 14 novembre 2026) :
 
-- **Inversion de priorité sur un service partagé.** Le cas : un client de fond est dans le service quand un client de classe image arrive. Quatre règles. (1) Un service a un thread passif par cœur, donc un appel reste sur le cœur de l'appelant et deux cœurs ne s'attendent pas. (2) Prêt : le client qui attend prête son contexte (budget et échéance) à celui qui est servi, jusqu'à ce que le service se libère. (3) Seuil à l'entrée : un appel n'entre que si le budget restant couvre le pire cas déclaré de l'appel (le contrat de latence de la capacité) ; sinon il attend sa recharge dehors. seL4 MCS a ce problème ouvert et le même remède en proposition (RFC-14, seuils de budget sur les endpoints, non fusionné à notre connaissance). (4) Épuisement malgré tout : faute de délai vers le superviseur du service, la requête est annulée, le service revient à son état d'avant. Un service doit donc écrire des requêtes annulables.
+- **Inversion de priorité sur un service partagé.** Le cas : un client de fond est dans le service quand un client de classe image arrive. Quatre règles. (1) Un service a un thread passif par cœur, donc un appel reste sur le cœur de l'appelant et deux cœurs ne s'attendent pas. (2) Prêt : le client qui attend prête son contexte (budget et échéance) à celui qui est servi, jusqu'à ce que le service se libère. (3) Seuil à l'entrée : un appel n'entre que si le budget restant couvre le pire cas déclaré de l'appel (le contrat de latence de la capacité) ; sinon il attend sa recharge dehors. seL4 MCS a ce problème ouvert et le même remède en proposition (RFC-14, seuils de budget sur les endpoints, non fusionné à notre connaissance). (4) Épuisement malgré tout : faute de délai vers le superviseur du service, la requête est annulée, le service revient à son état d'avant. Un service doit donc écrire des requêtes annulables. **[Remplacé le 14 novembre 2026 : un service choisit un thread ou un thread par cœur ; les requêtes annulables ne s'imposent qu'à nos services natifs ; voir « Décisions après la revue »]**
 - **Groupe de cœurs d'un processus multithread.** Un processus détient un groupe de cœurs : l'ensemble des cœurs où son espace d'adresses est actif. Les opérations sur l'espace d'adresses (mappage, révocation, invalidation de TLB) ne concernent que ce groupe. Le service de placement agrandit ou réduit le groupe selon la charge ; c'est ici que se branche la structure dynamique. Le budget est une réserve du groupe, où chaque contexte par cœur puise des tranches. Un groupe est d'un seul type de cœur par défaut. Le noyau notifie le runtime du nombre de cœurs qu'il a à l'instant, pour qu'il dimensionne ses threads au lieu de surcharger (idée des scheduler activations, de mémoire). Un thread préempté alors qu'il tient un verrou : celui qui attend lui prête son contexte, par le même mécanisme de prêt que ci-dessus.
 - **Temps passé dans les interruptions.** Les pilotes sont en espace utilisateur : une interruption n'est dans le noyau qu'un acquittement et une notification, de durée bornée. Ce temps est mesuré par horodatage à l'entrée et à la sortie, retiré au thread interrompu et débité au contexte du pilote. Le pilote traite sur son propre contexte ; budget épuisé, sa ligne d'interruption reste masquée jusqu'à la recharge, ce qui borne une tempête d'interruptions. Une complétion d'entrée-sortie est débitée au client dont la requête se termine : la requête porte une tranche de son budget. Les interruptions des périphériques hors classe image sont dirigées vers les cœurs économes ou regroupées en début de période.
 
@@ -464,8 +572,8 @@ Même partage que l'ordonnancement : mécanisme dans le noyau, politique en espa
 - **Objets mémoire** (modèle de Fuchsia) : un ensemble de pages désigné par une capacité, qui se mappe, se partage et se copie à l'écriture. C'est l'unité de partage entre processus et le support de l'instantané.
 - **Pagination en espace utilisateur** : un défaut de page sur un objet adossé au stockage devient un message au service de stockage. Les blobs sont mappés tels quels : le cache de pages est l'ensemble des blobs, partagé par hash entre tous les processus.
 - **Espace d'adresses** : les tables de pages sont la seule source de vérité, sans seconde structure à garder cohérente (approche de CortenMM). Invalidation de TLB limitée au groupe de cœurs du processus.
-- **Tailles de page** : 2 Mo par défaut pour les mémoires Wasm et le code compilé, 4 Ko sinon. Une mémoire Wasm réserve son espace virtuel avec des pages de garde, ce qui retire les contrôles de bornes.
-- **Budget, sans surengagement** : chaque tâche porte un budget mémoire. Une page anonyme est comptée à la tâche au premier accès ; une page de blob partagé est comptée au système. Budget dépassé : erreur d'allocation rendue au runtime, pas de processus tué plus tard par surprise.
+- **Tailles de page** : 2 Mo par défaut pour les mémoires Wasm et le code compilé, 4 Ko sinon. Une mémoire Wasm réserve son espace virtuel avec des pages de garde, ce qui retire les contrôles de bornes. **[Remplacé le 14 novembre 2026 : 2 Mo seulement au-delà d'un seuil ; pages de garde pour les mémoires 32 bits seulement ; voir « Décisions après la revue »]**
+- **Budget, sans surengagement** : chaque tâche porte un budget mémoire. Une page anonyme est comptée à la tâche au premier accès ; une page de blob partagé est comptée au système. Budget dépassé : erreur d'allocation rendue au runtime, pas de processus tué plus tard par surprise. **[Remplacé le 14 novembre 2026 : le compte se fait à la réservation, pas au premier accès ; voir « Décisions après la revue »]**
 - **Pression** : politique du service de mémoire. Dans l'ordre : vider les caches ; compresser en mémoire les pages des tâches de fond ; figer en instantané les surfaces non visibles et libérer leur mémoire ; déborder sur le disque. Tuer un processus sans instantané est le dernier recours, réservé au cas de force majeure (plus rien à libérer et une tâche de classe image menacée), et il est journalisé.
 - **Compression** : c'est l'équivalent de zram (pages compressées gardées en mémoire, sans disque), intégré au service de mémoire plutôt que déguisé en disque d'échange. L'équivalent de zswap (les pages compressées les plus froides débordent sur le disque) vient ensuite, vers une région chiffrée du magasin. Remplace la mention « pas de mémoire d'échange en v1 » : compression en v1, débordement sur disque après.
 - **Remise à zéro** : toute page est remise à zéro avant de changer de processus, par les cœurs économes au repos.
@@ -492,7 +600,7 @@ Un nouvel OS est l'occasion d'explorer. Idées connues ou non ; la nouveauté n'
 
 **Bas niveau, noyau**
 
-- ★ Instantané d'un processus comme primitive : l'état d'un composant Wasm est explicite (mémoire linéaire, tables, handles), donc il se fige, se range dans le stockage et reprend. Ouvre la reprise exacte après redémarrage ou mise à jour, la migration vers un autre appareil, le retour arrière. Ancêtres : persistance orthogonale d'EROS et KeyKOS.
+- ★ Instantané d'un processus comme primitive : l'état d'un composant Wasm est explicite (mémoire linéaire, tables, handles), donc il se fige, se range dans le stockage et reprend. Ouvre la reprise exacte après redémarrage ou mise à jour, la migration vers un autre appareil, le retour arrière. Ancêtres : persistance orthogonale d'EROS et KeyKOS. **[Remplacé le 14 novembre 2026 : version 1 réduite ; voir « Décisions après la revue »]**
 - ★ Noyau spécialisé à l'installation : le service de compilation construit le noyau pour la machine exacte (FRED ou IDT, APX, nombre et type de cœurs), sans test de fonctionnalité à l'exécution. Le système étant un hash, chaque variante reste vérifiable.
 - La page d'appels système comme optimiseur : puisqu'aucun appel n'est fait en direct, le noyau choisit par machine entre appel immédiat, exécution en mode utilisateur et mise en lot dans un anneau, et peut en changer à chaque version.
 - Anneaux de messages comme IPC principal pour l'asynchrone (le défaut de l'ABI), chemin rapide synchrone à côté. Ancêtres : FlexSC, io_uring, sDDF.
@@ -587,7 +695,7 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 - Sauvegarde : zones utilisateur et application, chiffrées avant l'envoi, vers un appareil du cercle, un disque externe ou un stockage objet de type S3. Incrémentale par construction (blobs désignés par hash). Restaurer : hash du système, liste des paquets, puis les objets. Changer de machine : appairage puis synchronisation.
 - Installateur : l'image USB est le système en session éphémère ; installer, c'est écrire les partitions et copier les blobs. Double amorçage : cohabitation sur un disque dédié ou un espace libre, sans redimensionner les partitions d'un autre système en v1. Emplacement de secours : image minimale avec réseau, stockage, réinstallation, restauration, diagnostic.
 - Firmwares : capsules UEFI ; source LVFS (de mémoire, à vérifier). Microcode : un blob du système, chargé par le noyau au démarrage.
-- Pression mémoire : chaque processus a un budget mémoire. Ordre : vider les caches, compresser les pages des tâches de fond, figer en instantané les surfaces non visibles et libérer leur mémoire. On ne tue jamais sans instantané. Compression en mémoire en v1, débordement sur disque ensuite.
+- Pression mémoire : chaque processus a un budget mémoire. Ordre : vider les caches, compresser les pages des tâches de fond, figer en instantané les surfaces non visibles et libérer leur mémoire. On ne tue jamais sans instantané. Compression en mémoire en v1, débordement sur disque ensuite. **[Remplacé le 14 novembre 2026 : tuer reste le dernier recours ; l'instantané automatique ne vaut que pour un composant Wasm au repos ; voir « Décisions après la revue »]**
 - Horloge : le noyau n'a qu'une horloge monotone. L'heure murale est un service (NTS), les fuseaux un blob.
 - Langues : ICU4X pour les locales ; moteurs de saisie en composants Wasm sans réseau, branchés sur le protocole de saisie ; anglais et français en v1 ; format des messages à choisir (Fluent ou MessageFormat 2).
 - Réglages : chaque service exporte ses réglages comme des actions avec schéma. L'écran des réglages est généré depuis le catalogue, et l'agent règle par le même chemin. Notifications : une surface du shell ; une notification porte des actions et une classe de priorité. Écran des droits : une requête sur l'arbre des capacités.
@@ -617,7 +725,7 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 
 **Développeur**
 
-- Terminal : une application. Shell : en porter un existant à données structurées (candidat Nushell, à vérifier), dont les commandes sont les actions ; pas de nouveau langage.
+- Terminal : une application. Shell : en porter un existant à données structurées (candidat Nushell, à vérifier), dont les commandes sont les actions ; pas de nouveau langage. **[Remplacé le 14 novembre 2026 : Nushell ne compile pas pour WASI ; candidat retiré jusqu'à vérification d'un portage natif]**
 - Compiler sur DodOS : pas un but de la v1 ; on développe depuis Linux et macOS avec l'userland hébergé.
 - Débogage : une capacité par composant (déjà noté). Traces : la boîte noire, exportée dans un format standard (Perfetto, à vérifier).
 
@@ -627,7 +735,7 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 - Clés de signature : rôles TUF, racine hors ligne sur clés matérielles, seuil de deux clés sur trois (une par personne, une au coffre).
 - Failles : fichier `SECURITY.md`, délai de divulgation de 90 jours, suivi des correctifs du noyau Linux à support long et de Ladybird.
 - Canaux auxiliaires : la règle « un processus par éditeur » borne déjà le partage ; protections Spectre de Wasmtime actives ; horloge de précision réduite pour le contenu non fiable.
-- Classe d'effet déclarée par l'application (faiblesse relevée) : la classe déclarée fixe les capacités remises pour l'appel. Une action `read` ne reçoit que des capacités en lecture et pas de réseau ; `reversible` ne reçoit que du stockage versionné ; seule `external` reçoit le réseau. Mentir sur la classe ne donne donc rien de plus.
+- Classe d'effet déclarée par l'application (faiblesse relevée) : la classe déclarée fixe les capacités remises pour l'appel. Une action `read` ne reçoit que des capacités en lecture et pas de réseau ; `reversible` ne reçoit que du stockage versionné ; seule `external` reçoit le réseau. Mentir sur la classe ne donne donc rien de plus. **[Remplacé le 14 novembre 2026 : faux avec `core.wit` actuel ; vrai seulement avec une instance neuve par action ; voir « Décisions après la revue »]**
 
 **Workflow**
 
