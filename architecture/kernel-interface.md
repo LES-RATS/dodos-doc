@@ -2,7 +2,7 @@
 
 Statuses are defined in the [README](../README.md#status-legend).
 
-**Proposed, 14 November 2026. First draft.** This file is the contract of the kernel: its objects, its system calls and the rules that bind them. It is written before any kernel code (**Decided**, 14 November 2026). The executable model, the oracle harness and the kernel are all written from it. Names and counts are provisional; the trials of weeks 1-2 and the one-core model will change them.
+**Decided, 14 November 2026**: validated by the two humans, except the sections that carry their own status. The numbers stay provisional. This file is the contract of the kernel: its objects, its system calls and the rules that bind them. It is written before any kernel code (**Decided**, 14 November 2026). The executable model, the oracle harness and the kernel are all written from it. Names and counts are provisional; the trials of weeks 1-2 and the one-core model will change them.
 
 The kernel knows nothing about Wasm, WIT or components. The runtime and the services build those on top of this interface.
 

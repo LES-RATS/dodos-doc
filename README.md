@@ -41,7 +41,7 @@ State of the documentation: 14 November 2026. The content comes from a brainstor
 | [research/verification-status.md](research/verification-status.md) | What was verified and when, what is from memory |
 | [reviews/2026-11-14-design-review.md](reviews/2026-11-14-design-review.md) | Independent design review of 14 November 2026 (French, 27 findings, unchanged) |
 | [archive/DIRECTION.fr.md](archive/DIRECTION.fr.md) | The original single-file direction document (French, archived, not edited) |
-| `contracts/` | The WIT contract, maintained separately: [core.wit](contracts/core.wit) (shared types and the worlds `service`, `app`, `agent`), [store.wit](contracts/store.wit), [ui.wit](contracts/ui.wit), [actions.wit](contracts/actions.wit), [catalog.wit](contracts/catalog.wit). Packages `os:core`, `os:catalog-agent` and `os:catalog-app`, all at 0.1.0. Described in [architecture/wasm-abi.md](architecture/wasm-abi.md#corewit) |
+| `contracts/` | The WIT contract, maintained separately: [core.wit](contracts/README.md) (shared types and the worlds `service`, `app`, `agent`), [store.wit](contracts/README.md), [ui.wit](contracts/README.md), [actions.wit](contracts/README.md), [catalog.wit](contracts/README.md). Packages `os:core`, `os:catalog-agent` and `os:catalog-app`, all at 0.1.0. Described in [architecture/wasm-abi.md](architecture/wasm-abi.md#corewit) |
 
 ## Status legend
 

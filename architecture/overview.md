@@ -19,7 +19,7 @@ Microkernel (Zig, Rust)           capabilities, IPC, scheduling, memory, IOMMU
 Terms used in the diagram:
 
 - **Wasm component**: a WebAssembly binary in the Component Model format, which declares typed imports and exports.
-- **WIT**: the interface description language of the Component Model. A **WIT world** is the full set of interfaces a component imports and exports. `os:core` is the DodOS package of worlds; its contract is [contracts/core.wit](../contracts/core.wit).
+- **WIT**: the interface description language of the Component Model. A **WIT world** is the full set of interfaces a component imports and exports. `os:core` is the DodOS package of worlds; its contract is [contracts/core.wit](../contracts/README.md).
 - **IPC**: inter-process communication, the message passing between processes that the kernel provides.
 - **IOMMU**: the hardware unit that restricts which memory a device can reach.
 

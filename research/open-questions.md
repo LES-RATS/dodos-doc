@@ -48,11 +48,11 @@ The contract files in `contracts/` mark their unsettled points with `// OPEN:`. 
 
 | File | Open items |
 |---|---|
-| [core.wit](../contracts/core.wit) | Every size cap is a provisional number. Textual form of the publisher key. The WASI 0.3 imports are not listed in the worlds yet. Background wake-up by the notification service has no interface. The three other ways to draw, and text input, have no interface. Objects handed to the agent with a request have no path |
-| [store.wit](../contracts/store.wit) | No purge offered to components. Width and alphabet of the object identifier. Which versions stay readable (retention policy). The query filter has no "or", no negation, no full-text or semantic search. Pasted text travels as an object, with no by-value shortcut |
-| [actions.wit](../contracts/actions.wit) | Schema language of actions (JSON Schema 2020-12 assumed) and how a schema marks a storage item. The WIT breaking-change check does not see a schema change. Marks between a task and its sub-task. The interfaces `inference`, `memory` and `audio` are stubs |
-| [catalog.wit](../contracts/catalog.wit) | The list of semantic icon names is a starting set. The fields of the application-level kinds are a minimum. How one draws into `canvas` |
-| [ui.wit](../contracts/ui.wit) | None |
+| [core.wit](../contracts/README.md) | Every size cap is a provisional number. Textual form of the publisher key. The WASI 0.3 imports are not listed in the worlds yet. Background wake-up by the notification service has no interface. The three other ways to draw, and text input, have no interface. Objects handed to the agent with a request have no path |
+| [store.wit](../contracts/README.md) | No purge offered to components. Width and alphabet of the object identifier. Which versions stay readable (retention policy). The query filter has no "or", no negation, no full-text or semantic search. Pasted text travels as an object, with no by-value shortcut |
+| [actions.wit](../contracts/README.md) | Schema language of actions (JSON Schema 2020-12 assumed) and how a schema marks a storage item. The WIT breaking-change check does not see a schema change. Marks between a task and its sub-task. The interfaces `inference`, `memory` and `audio` are stubs |
+| [catalog.wit](../contracts/README.md) | The list of semantic icon names is a starting set. The fields of the application-level kinds are a minimum. How one draws into `canvas` |
+| [ui.wit](../contracts/README.md) | None |
 
 **The package manifest format is a contract that does not exist yet.** It has to fix the declaration of actions (name, description, schemas, effect class), the textual form of the publisher key, the capabilities a package requests, and the check that sees a breaking change of an action schema.
 

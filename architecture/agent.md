@@ -21,9 +21,9 @@ The agent is the AI assistant built into the system. It acts for the user throug
 
 ## The agent in the contract
 
-The `agent` world ([contracts/core.wit](../contracts/core.wit)) exports one function, `handle`, called once per user request with the user's words, a `task` and an `overlay` surface.
+The `agent` world ([contracts/core.wit](../contracts/README.md)) exports one function, `handle`, called once per user request with the user's words, a `task` and an `overlay` surface.
 
-- The **task** is the unit of delegation ([contracts/actions.wit](../contracts/actions.wit)). It carries the delegated rights, the marks and the journal, and is revocable as a whole. Everything the agent can do comes from it, and nothing survives it.
+- The **task** is the unit of delegation ([contracts/actions.wit](../contracts/README.md)). It carries the delegated rights, the marks and the journal, and is revocable as a whole. Everything the agent can do comes from it, and nothing survives it.
 - Through the task the agent reads its marks, lists the actions of its scope (`available`), invokes one (`invoke`), undoes one journal entry (`undo`), reads the journal, and creates a sub-task with a subset of the scope.
 - The world imports `inference`, `memory` and `audio`. These three interfaces are stubs in the contract: nothing is fixed yet.
 
@@ -43,7 +43,7 @@ The **effect class** of an action says what the action can change. It has two fi
 - The actions and their classes are in the signed package manifest: for each action, its name, description, input schema, output schema and effect class. There is no `list-actions` function: a function could change its answer after installation, and the component would have to run to be asked. The system reads the manifest and serves it to the agent as `action-info`.
 - Each action runs in a fresh instance, on which the system calls only `actions.invoke`. The instance shares no memory with the running application and is destroyed afterwards. It holds only what the request carries (input, bound objects, the `home` collection), attenuated to the class.
 - The imports of an action instance are linked to match its class: storage is read-only when `change` is `none`, and every network import answers `denied` when `reach` is `local`. The declared class is therefore binding, and lying about it gains nothing. Every write to the store is versioned, which is why a store capability is safe to hand to an action whose change is `reversible`.
-- The contract is in [contracts/actions.wit](../contracts/actions.wit) and [contracts/core.wit](../contracts/core.wit).
+- The contract is in [contracts/actions.wit](../contracts/README.md) and [contracts/core.wit](../contracts/README.md).
 
 ### Provenance marks
 

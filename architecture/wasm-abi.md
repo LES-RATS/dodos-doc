@@ -31,11 +31,11 @@ The contract lives in `contracts/`. It holds three packages, all at version 0.1.
 
 | Package | File | Content |
 |---|---|---|
-| `os:core` | [core.wit](../contracts/core.wit) | Shared types (errors, rights, effect class, marks, provenance) and the three worlds |
-| `os:core` | [store.wit](../contracts/store.wit) | Storage (`store`), capabilities kept across launches (`keep`), object exchange (`exchange`) |
-| `os:core` | [ui.wit](../contracts/ui.wit) | Surfaces and the open interface tree |
-| `os:core` | [actions.wit](../contracts/actions.wit) | Actions on the application side, tasks on the agent side, agent stubs |
-| `os:catalog-agent`, `os:catalog-app` | [catalog.wit](../contracts/catalog.wit) | The two catalogue levels, each versioned on its own (see [ui.md](ui.md#catalogue)) |
+| `os:core` | [core.wit](../contracts/README.md) | Shared types (errors, rights, effect class, marks, provenance) and the three worlds |
+| `os:core` | [store.wit](../contracts/README.md) | Storage (`store`), capabilities kept across launches (`keep`), object exchange (`exchange`) |
+| `os:core` | [ui.wit](../contracts/README.md) | Surfaces and the open interface tree |
+| `os:core` | [actions.wit](../contracts/README.md) | Actions on the application side, tasks on the agent side, agent stubs |
+| `os:catalog-agent`, `os:catalog-app` | [catalog.wit](../contracts/README.md) | The two catalogue levels, each versioned on its own (see [ui.md](ui.md#catalogue)) |
 
 The first draft, a single file, was validated by `wasm-tools 1.263`.
 
