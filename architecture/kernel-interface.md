@@ -41,7 +41,7 @@ The kernel knows nothing about Wasm, WIT or components. The runtime and the serv
 
 Device memory (MMIO) is an `untyped` marked as device memory; it can only become a `frame` that is mapped, never a kernel object.
 
-The **memory object** of [memory.md](memory.md#memory-objects) (sharing, copy on write, paging, compression) is not a kernel object. It is built by the memory service from frames (**Proposed**, 14 November 2026; recommendation of the assistant, see [Memory outside the kernel](#memory-outside-the-kernel)).
+The **memory object** of [memory.md](memory.md#memory-objects) (sharing, copy on write, paging, compression) is not a kernel object. It is built by the memory service from frames (**Decided**, 14 November 2026, see [Memory outside the kernel](#memory-outside-the-kernel)).
 
 ## System calls
 
@@ -64,7 +64,7 @@ Faults are not calls. A page fault, an illegal instruction or a budget overrun b
 
 ## Memory outside the kernel
 
-**Proposed, 14 November 2026.** The kernel knows frames and mappings, nothing else. Memory that is already mapped costs nothing more. The extra cost is on faults only: one IPC round trip to the memory service instead of a path inside the kernel.
+**Decided, 14 November 2026.** The kernel knows frames and mappings, nothing else. A single memory service in user space owns the policy for every core, so memory moves between the per-core kernels by one decision in one place. Memory that is already mapped costs nothing more. The extra cost is on faults only: one IPC round trip to the memory service instead of a path inside the kernel.
 
 Why this stays cheap here:
 
