@@ -87,7 +87,8 @@ flowchart TD
 
 | Item | Who | State |
 |---|---|---|
-| Reference model, one core | Gemini 4 Hydrogen | In progress since 14 November 2026, branch `model-one-core` of the kernel repository |
+| Reference model, one core | Gemini 4 Hydrogen | Written; [pull request 1](https://github.com/Vehicoule/dodos-kernel/pull/1) waits for the review of the two humans. 27 contract gaps reported |
+| Second reference model, for comparison only | Mistral Large 4 | In progress since 14 November 2026, branch `model-b-one-core` |
 | Package manifest contract | | Not started |
 | Trials of weeks 1-2 | | Not started |
 
