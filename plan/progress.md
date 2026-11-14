@@ -87,8 +87,7 @@ flowchart TD
 
 | Item | Who | State |
 |---|---|---|
-| Reference model, one core | Gemini 4 Hydrogen | Written; [pull request 1](https://github.com/Vehicoule/dodos-kernel/pull/1) waits for the review of the two humans. 27 contract gaps reported |
-| Second reference model, for comparison only | Mistral Large 4 | In progress since 14 November 2026, branch `model-b-one-core` |
+| Reference model, one core | Claude Fable 5.2 | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3). To do: follow the revision D-100, review by Gemini, re-reading by the two humans |
 | Package manifest contract | | Not started |
 | Trials of weeks 1-2 | | Not started |
 

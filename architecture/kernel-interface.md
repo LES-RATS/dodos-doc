@@ -64,7 +64,7 @@ Faults are not calls. A page fault, an illegal instruction or a budget overrun b
 
 ## Call reference, one core
 
-**Decided, 14 November 2026** (D-099): settled by the assistant at the user's request, from the gaps that two independent first models reported (27 by Gemini 4 Hydrogen, 29 by Mistral Large 4); re-read by the two humans. It covers the calls of the one-core model: capabilities, object creation, threads, IPC and notifications. The other groups are specified when their model is written. The points marked **(design choice)** are the ones where another answer was reasonable.
+**Decided, 14 November 2026** (D-099): settled by the assistant at the user's request, from the gaps that two independent first models reported (27 by Gemini 4 Hydrogen, 29 by Mistral Large 4); re-read by the two humans. Revised the same day (D-100) after the reference model written from it showed six mistakes. It covers the calls of the one-core model: capabilities, object creation, threads, IPC and notifications. The other groups are specified when their model is written. The points marked **(design choice)** are the ones where another answer was reasonable.
 
 ### Slots and addresses
 
@@ -72,16 +72,22 @@ Faults are not calls. A page fault, an illegal instruction or a budget overrun b
 - **Slot 0 of every capability space is never used.** Address 0 therefore means "no capability" wherever an argument is optional.
 - A slot is **empty**, **full** or **dead**. A slot becomes dead when its capability is removed by someone else (revocation, or the destruction of what it was derived from). Using a dead slot returns `gone`; using an empty slot returns `invalid`. `cap_delete` on a dead slot makes it empty. A dead slot is not free: nothing can be placed in it. This is what keeps a stale index from silently naming a new object.
 - A thread needs no right to use its own capability space. Through a `cspace` capability, reading a slot (as the source of `cap_derive` or `cap_inspect`, or as the target of a call) needs `read`, and changing a slot (placing, moving out, deleting, revoking) needs `write`.
-- A `cspace` is created with a maximum number of slots, which fixes the size of its directory (8 bytes per 128 slots), and with no slot. `cspace_grow` adds one segment of 128 slots (4 KB) from an untyped. Slot indexes never change. **(design choice)**
+- A `cspace` is created with a maximum number of slots (a non-zero multiple of 128), which fixes the size of its directory (8 bytes per 128 slots, rounded up to a power of two), and with no slot. `cspace_grow` adds one segment of 128 slots (4 KB). Slot indexes never change. **(design choice)**
+- **A `cspace` grows only from the untyped it was created from.** Its segments then die with it and with that untyped, and no object depends on two untypeds. The creator of a process gives it one untyped for all its kernel objects.
+- A destination that is slot 0 or beyond the table is `invalid`.
 
 ### The derivation tree
 
-- Every capability has one parent, except the capabilities given at start-up. `untyped_retype` makes the new capability a child of the untyped capability. `cap_derive` makes the new capability a child of its source. There is no separate "copy": a copy is a derivation with the same rights.
+- Every capability has one parent, except the capabilities given at start-up, each of which is the root capability of its object. `untyped_retype` makes the new capability a child of the untyped capability. `cap_derive` makes the new capability a child of its source. There is no separate "copy": a copy is a derivation with the same rights.
 - **A capability never outlives the capability it was derived from.** `cap_revoke` removes all the descendants of a capability and keeps the capability. `cap_delete` removes the descendants, then the capability. **(design choice: the alternative, as in seL4, hands the children to the grandparent)**
 - **An object lives exactly as long as the capability that `untyped_retype` returned for it** (its root capability), wherever that capability has been moved. There is no reference count. When the root capability is removed the object is destroyed and its memory goes back to the untyped it came from.
 - `cap_move` moves a capability to an empty slot. Its place in the tree, its rights and its badge do not change.
+- **The tree is at most 64 deep** (provisional). A derivation or a creation that would go deeper is `invalid`.
+- **A capability cannot be moved into a capability space that descends from it** (`invalid`). Otherwise a capability space could hold the capability its own memory depends on, and its removal would never end. The check walks up from the root capability of the destination space, at most 64 steps. It applies to `cap_move` and to a capability moved by IPC.
+- A derived capability has a subset of its parent's rights. A capability made by `untyped_retype` does not: it gets the rights of its kind, whatever the rights of the untyped.
 - Removal runs in bounded steps: at most 32 capabilities are removed or threads woken per call (provisional), and the call returns `again` while work remains. The order is fixed: the most recently derived child first, and a capability only after all its descendants. Between two steps the tree is well formed.
-- Destroying an object wakes every thread that waits on it, with `gone`. Destroying a `cspace` first removes every capability in it, in index order, by the same steps. A thread whose capability space is destroyed gets `gone` from every call.
+- **Removal always ends.** From the first step of `cap_delete`, the capability is dying: any other use of it returns `gone`. An object whose root capability is dying takes no new waiting thread: a call that would wait on it returns `gone`. So its queues only shrink.
+- Destroying an object wakes every thread that waits on it, with `gone`. This includes the thread that waits to receive with a reply object, and the caller that waits for an answer through it. A caller is not woken when the server thread alone is destroyed: the reply object is the handle, and another thread can still answer through it. Destroying a `cspace` first removes every capability in it, in index order, by the same steps. A thread whose capability space is destroyed gets `gone` from every call.
 - **Rights are checked when a call is made.** A thread that already waits is not disturbed when the capability it used is revoked; it is woken with `gone` only when the object itself is destroyed. **(design choice: waking it would need an unbounded search of the wait queues)**
 
 ### Order of checks
@@ -97,17 +103,17 @@ Every call checks in this order and returns the first failure:
 
 | Call | Arguments | Result | Rights and rules |
 |---|---|---|---|
-| `cap_derive` | source, destination, rights, badge | | `derive` on the source. The new rights must be a subset of the source's (`denied` otherwise). A badge is accepted only on an `endpoint` or a `notify` (`invalid` otherwise). A capability that already has a badge keeps it: asking for another one is `denied`. Badge 0 means no badge |
+| `cap_derive` | source, destination, rights, badge | | `derive` on the source. The new rights must be a subset of the source's (`denied` otherwise). A badge is accepted only on an `endpoint` or a `notify` (`invalid` otherwise). A capability that already has a badge keeps it: asking for another one is `denied` (checked with the plain arguments); asking for the same one is accepted. Badge 0 means no badge |
 | `cap_move` | source, destination | | No right on the capability itself |
 | `cap_delete` | slot | | Returns `again` while descendants remain |
 | `cap_revoke` | slot | | Returns `again` while descendants remain |
 | `cap_inspect` | slot | kind, rights, badge | No right on the capability itself |
 | `untyped_retype` | untyped, kind, size argument, destination | | `write` on the untyped. One object per call. The size argument is: bytes for a child `untyped` (a power of two, at least 4 KB), the page size and the number of pages for a `frame`, the maximum number of slots for a `cspace`, and 0 for the other kinds. Device memory can only become a `frame` or a child `untyped` (`invalid` otherwise) |
-| `cspace_grow` | cspace, untyped | new number of slots | `manage` on the cspace, `write` on the untyped. `no_slot` when the maximum is reached |
+| `cspace_grow` | cspace, untyped | new number of slots | `manage` on the cspace, `write` on the untyped, which must be the one the cspace was created from (`invalid`). `no_slot` when the maximum is reached |
 
 Rules of `untyped_retype`:
 
-- Memory is taken at a watermark that only moves up, aligned on the size of the object (on the page size for a frame). The watermark returns to zero when the last object taken from the untyped is destroyed.
+- Memory is taken at a watermark that only moves up. Object sizes are powers of two; the watermark is aligned on the size of the object, or on 4 KB if the object is larger, and on the page size for a frame. The watermark returns to zero when the last object taken from the untyped is destroyed.
 - The new capability has every right, with one exception: it has `exec` only if the untyped capability has `exec`, and never on device memory. This is how the right to make executable frames stays with the compile service.
 - The kernel clears the memory of kernel objects. It does not clear frames: the holder of an untyped already has authority over that memory, and the memory service clears pages before it hands them out. **(design choice)**
 
@@ -118,7 +124,7 @@ A new thread is suspended and bound to nothing.
 | Call | Arguments | Rights and rules |
 |---|---|---|
 | `thread_configure` | thread, cspace, aspace, fault endpoint | `manage` on the thread, `manage` on the cspace and on the aspace, `send` on the fault endpoint. The aspace and the fault endpoint may be 0. The thread must be suspended (`busy` otherwise) |
-| `thread_resume`, `thread_suspend` | thread | `manage`. Both succeed when the thread is already in the state asked for |
+| `thread_resume`, `thread_suspend` | thread | `manage`. Both succeed when the thread is already in the state asked for. `thread_resume` is `busy` if the thread is bound to no capability space |
 | `thread_read_regs`, `thread_write_regs` | thread, register block | `read`, respectively `write`. The thread must be suspended (`busy`). The register block is defined by the architecture layer; it is not part of the one-core model |
 
 **Suspension and waiting are independent (design choice).** Suspending a thread that waits cancels nothing: the thread keeps its place in its queue, a message can still be delivered to it, and it runs again only when it is resumed. A waiting thread is removed from its queue only when it, or the object it waits on, is destroyed.
@@ -147,9 +153,10 @@ This fixes the details of the [capability transfer](#capability-transfer) descri
 
 - The message lists up to 4 slot addresses, each as *move* or as *derive* with a set of rights. A derived capability is a child of the sender's capability and keeps its badge.
 - **Checked when the call is made**, as in [Order of checks](#order-of-checks): each listed slot, `derive` on each capability to derive, and `grant` on the endpoint or reply object. A failure returns an error and sends nothing.
-- **Checked at delivery**: every listed capability still exists, and the first slots of the receiver's range are empty, one per capability. If not, no capability moves, the words are still delivered, and the header the receiver sees has the flag `caps_dropped` and a capability count of 0.
-- The sender learns it: `send` returns the flag at once; for `call`, the kernel sets the flag in the header of the reply.
-- The receive range (first slot address and count, at most 4) is given with `call`, `recv` and `reply_recv`. An empty range refuses every capability.
+- **Checked again at delivery**, against what the listed slots hold at that moment: the same checks as when the call was made, and the first slots of the receiver's range are empty, one per capability. The kernel does not remember which capability was in a slot while the caller waited; a thread that shares its capability space answers for it. If not, no capability moves, the words are still delivered, and the header the receiver sees has the flag `caps_dropped` and a capability count of 0.
+- The sender learns it: `send` returns the flag at once; for `call`, the kernel sets the flag in the header of the reply. The flag in a reply header therefore means that the capabilities of the request or of the reply were dropped. A server that answers with `reply_recv` is not told that the capabilities of its reply were dropped.
+- A slot listed twice in one message is `invalid`.
+- The receive range (first slot address and count, at most 4) is given with `call`, `recv` and `reply_recv`. An empty range refuses every capability, and its address is not looked at.
 
 ### Notifications
 
@@ -158,7 +165,7 @@ This fixes the details of the [capability transfer](#capability-transfer) descri
 | `signal` | notify | | `send`. Sets in the word the bits of the capability's badge, or bit 0 if it has no badge. If a thread waits, the first one is woken with the whole word and the word is cleared |
 | `wait` | notify | the word | `recv`. Returns the word and clears it, or waits if it is zero |
 | `poll` | notify | the word | `recv`. As `wait`, but returns `would_wait` if the word is zero |
-| `notify_bind` | notify, endpoint | | `recv` on the notify, `manage` on the endpoint. Endpoint 0 removes the binding. One notify per endpoint and one endpoint per notify (`busy` otherwise) |
+| `notify_bind` | notify, endpoint | | `recv` on the notify, `manage` on the endpoint. Endpoint 0 removes the binding, and succeeds if there is none. One notify per endpoint and one endpoint per notify (`busy` otherwise). If the word is not zero and a thread already waits to receive on the endpoint, the notification is delivered at once |
 
 - **A bound notify is how one thread serves both requests and interrupts (design choice).** `recv` and `reply_recv` on the endpoint return a pending notification before any caller: the header has the flag `notification`, the badge field holds the word, and the word is cleared. A `signal` on a bound notify wakes the first thread that waits to receive on the endpoint, if no thread waits on the notify itself; that thread's reply object becomes idle.
 - `wait` and `poll` take a `notify` only, never an endpoint.
