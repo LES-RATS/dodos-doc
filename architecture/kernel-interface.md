@@ -45,14 +45,14 @@ The **memory object** of [memory.md](memory.md#memory-objects) (sharing, copy on
 
 ## System calls
 
-About 45 calls. All take capability slots and words. The calls of the one-core model are specified in [Call reference, one core](#call-reference-one-core).
+About 46 calls. All take capability slots and words. The calls of the one-core model are specified in [Call reference, one core](#call-reference-one-core).
 
 | Group | Calls | Notes |
 |---|---|---|
 | Capabilities | `cap_derive`, `cap_move`, `cap_delete`, `cap_revoke`, `cap_inspect`, `cspace_grow` | `cap_derive` copies with fewer rights or with a badge. `cap_revoke` deletes everything derived from a capability; it is the distributed two-phase protocol between kernels, and it returns `again` |
 | Memory | `untyped_retype`, `aspace_map`, `aspace_unmap`, `aspace_protect` | `aspace_map` accepts a run of frames and a page size, so one call maps a large block |
 | IPC | `call`, `reply_recv`, `recv`, `send`, `signal`, `wait`, `poll`, `notify_bind` | `call` and `reply_recv` are the fast path. `send` never blocks and never queues. `recv` on an endpoint with a bound `notify` also returns notifications |
-| Threads | `thread_configure`, `thread_read_regs`, `thread_write_regs`, `thread_resume`, `thread_suspend`, `yield` | |
+| Threads | `thread_configure`, `thread_read_regs`, `thread_write_regs`, `thread_resume`, `thread_suspend`, `thread_cancel`, `yield` | |
 | Scheduling | `sched_configure`, `sched_bind`, `sched_unbind`, `sched_set_cores` | Admission control is in `sched_configure`. `sched_set_cores` is reserved to the placement service |
 | Time | `timer_set`, `timer_cancel` | The monotonic clock is read from a shared page, without a call |
 | Interrupts and devices | `irq_bind`, `irq_ack`, `iospace_map`, `iospace_unmap`, `iospace_attach` | |
@@ -131,9 +131,12 @@ A new thread is suspended and bound to nothing.
 |---|---|---|
 | `thread_configure` | thread, cspace, aspace, fault endpoint | `manage` on the thread, `manage` on the cspace and on the aspace, `send` on the fault endpoint. The aspace and the fault endpoint may be 0. The thread must be suspended and must not wait (`busy` otherwise): a wait holds a receive range of the old capability space |
 | `thread_resume`, `thread_suspend` | thread | `manage`. Both succeed when the thread is already in the state asked for. `thread_resume` is `busy` if the thread is bound to no capability space, or to one that is destroyed; a thread bound to a dying space can be resumed. This `busy` comes before "already in the state asked for"; `thread_suspend` succeeds on a thread bound to no space |
+| `thread_cancel` | thread | `manage`. If the thread waits (queued on an endpoint, waiting for a reply, waiting to receive, waiting on a notify), it is taken out of its queue and its call returns `cancelled`; a reply object it was attached to, or that was armed with it, becomes idle, so a later answer is dropped as for any reply object that is not armed. If the thread does not wait, the call succeeds and changes nothing: nothing is remembered for its next wait. A suspended thread that is cancelled stays suspended and gets `cancelled` when it runs again |
 | `thread_read_regs`, `thread_write_regs` | thread, register block | `read`, respectively `write`. The thread must be suspended (`busy`). The register block is defined by the architecture layer; these two calls are not part of the one-core reference and are `unsupported` in it |
 
-**Suspension and waiting are independent (design choice).** Suspending a thread that waits cancels nothing: the thread keeps its place in its queue, a message can still be delivered to it, and it runs again only when it is resumed. A waiting thread is removed from its queue only when it, or the object it waits on, is destroyed.
+**Suspension and waiting are independent (design choice).** Suspending a thread that waits cancels nothing: the thread keeps its place in its queue, a message can still be delivered to it, and it runs again only when it is resumed. A waiting thread is removed from its queue only when it, or the object it waits on, is destroyed, or by `thread_cancel`.
+
+**The kernel has no time limit on a wait; `thread_cancel` is how one is built (design choice, D-106).** A client that wants a limit arms a timer that signals a notify, and a second thread cancels the first when the notify fires. The alternative, a deadline on every wait, needs a sorted queue of deadlines in the kernel. Because a cancel that arrives before the wait is not remembered, the thread that cancels repeats until the other has seen it; a remembered cancel would hit an unrelated later call.
 
 ### IPC
 
@@ -270,6 +273,7 @@ A fixed, small set. Every caller handles `gone` and `again`.
 | `budget` | Admission refused: the scheduling budgets exceed the period |
 | `would_wait` | A non-blocking call found nothing |
 | `unsupported` | Not available on this architecture or kernel version |
+| `cancelled` | The wait was ended by `thread_cancel` |
 
 ## Object sizes
 
@@ -435,7 +439,6 @@ The Zig part is the architecture layer plus the fast path, so it is rewritten fo
 ## Open points
 
 - **The depth rule and a machine that does not die.** The start-up `untyped` capabilities never leave the start-up space, which lives in one core's kernel. The multi-core part must say how the root of authority survives the loss of that kernel: one start-up space per core, each able to recreate the supervisor and the memory service, or another answer. Until then the first process is a single point of failure, as the root task of seL4 is.
-- **Cancelling a wait.** A thread blocked in `call` can be woken only by the death of the server or of the reply object; suspension cancels nothing. A call that wakes a waiting thread with an error is to be added, so that time limits can be built outside the kernel (timer, notification, cancel).
 - **Who clears frames** is decided with the memory part: the kernel does not clear them today (design choice), and the memory service gives pages from one process to another without the kernel in the common case.
 - Numbers (error codes, bits of the rights, kinds, calls, layout of the header) are defined in `abi/`, which is the reference for values; this document names them.
 - Raised by the fourth review, to settle with their groups: what becomes of a thread whose address space or fault endpoint is destroyed; the slot of each start-up capability in the start-up page; `task_revoke` "in one operation" against bounded steps; whether a frame is an object in the table of sizes; the number of the reserved kind `vcpu`.
