@@ -119,6 +119,15 @@ Flux (refinement types for Rust) as a proof tool is **Aligned** (retained, to be
 
 **Proposed** (decision of the user; recommendation). Cost is not the constraint. The criterion is the ratio of quality to time. The work is spread over several model providers, with a cheaper model as fallback. The per-task ceiling of the harness stays, as a guard against loops, not as a spending limit.
 
+**Roles** (**Decided**, 14 November 2026):
+
+| Work | Model |
+|---|---|
+| Executable model of the kernel (the reference) | Gemini 4 Hydrogen, thinking level high |
+| Kernel implementation | Claude Fable 5.2, effort medium |
+| Web research and minor codebase exploration | DeepSeek, thinking max |
+| Everything else delegated | Gemini 4 Hydrogen, thinking level high |
+
 ## Reading the code of other kernels
 
 **Decided.** The agents read the code of all open kernels, seL4 included. From seL4 the project takes only the minimalism, the tests and the benches, in other languages and another architecture. One rule: no file-by-file translation and no copy, and the origin of an idea that is taken is cited. Permissive sources verified: Barrelfish (MIT), NVIDIA core (MIT); Asterinas is under MPL-2.0, the seL4 kernel under GPLv2. There is no separation into two agents: the cost was judged disproportionate. A legal opinion is needed before a commercial version.
