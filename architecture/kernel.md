@@ -37,7 +37,7 @@ The kernel has its own replacement mechanism, based on versioned object formats 
 
 ### Nodes, cores and load
 
-**Proposed, 14 November 2026** (D-108), to validate by the two humans and to design before the one-core kernel is written, for what it fixes in the layout of kernel state.
+**Decided, 15 November 2026** (D-108, validated by D-113), except the question of a node on several cores, which the measured trial decides. To design before the one-core kernel is written, for what it fixes in the layout of kernel state.
 
 - **A node is the state of one per-core kernel**, held in one block of memory with a defined, versioned format: the root of its capability tree, its scheduling state, its share of physical memory. The kernel code works on the node it is given. (The kernel control block of Barrelfish/DC, cited.)
 - **A node is bound to a core at run time, not for ever.** Under low load the nodes of several cores are parked on one core that stays awake and runs them in turn, and the other cores sleep; under load each node gets its core back. Nodes still share no state and talk only by messages, parked or not, so nothing above the kernel sees the difference except in timing.
