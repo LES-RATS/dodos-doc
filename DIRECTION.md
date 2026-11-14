@@ -242,7 +242,7 @@ Partitions : (1) partition EFI en FAT32, imposée par le firmware, qui porte les
 - Comparaison avec Fuchsia (vérifié le 14 novembre 2026, documentation officielle) : bootfs (image en lecture seule chargée au démarrage) correspond à notre image de démarrage signée ; blobfs (paquets, adressés par contenu) à nos zones système et paquets ; minfs puis Fxfs (données modifiables) à nos objets. Fuchsia a accepté de ranger les blobs dans Fxfs et de supprimer son gestionnaire de volumes (RFC-0225) : un seul magasin, comme nous.
 - La vue POSIX des logiciels portés est fabriquée par la table de noms du processus : `/tmp` vers la zone éphémère, le dossier personnel vers la zone d'application.
 - Remise à zéro : effacer les zones appareil et utilisateur. Embarqué : zones système et appareil seulement.
-- Réponses proposées aux points ouverts ci-dessous : (1) un second type d'objet, modifiable par extents, copie sur écriture, somme de contrôle par bloc, sans arbre de Merkle ; ses versions sont des instantanés ; les bases SQLite des applications y vivent. (2) Un disque pour le magasin en v1 ; un autre disque est un magasin de plus où placer des zones ; miroir plus tard. (3) Le quota est porté par la capacité de la collection. (4) Toutes les versions pendant 30 jours, puis une par jour, puis une par semaine ; réglable. (5) Pas de mémoire d'échange en v1 (voir pression mémoire). (6) Accepté ; une installation privée va dans la zone de l'utilisateur.
+- Réponses proposées aux points ouverts ci-dessous : (1) un second type d'objet, modifiable par extents, copie sur écriture, somme de contrôle par bloc, sans arbre de Merkle ; ses versions sont des instantanés ; les bases SQLite des applications y vivent. (2) Un disque pour le magasin en v1 ; un autre disque est un magasin de plus où placer des zones ; miroir plus tard. (3) Le quota est porté par la capacité de la collection. (4) Toutes les versions pendant 30 jours, puis une par jour, puis une par semaine ; réglable. (5) Compression en mémoire en v1, débordement chiffré sur disque ensuite (voir gestion de la mémoire). (6) Accepté ; une installation privée va dans la zone de l'utilisateur.
 - Ouvert : (1) objets très modifiés (base de données d'une application, image disque) : une suite de blobs immuables coûte cher en écritures aléatoires, il faut sans doute un type d'objet modifiable par extents, sans arbre de Merkle ; (2) plusieurs disques, miroir ; (3) quotas par application ; (4) durée de garde des versions ; (5) mémoire d'échange : compression d'abord, région chiffrée ensuite, à décider ; (6) les paquets installés par un utilisateur sont visibles des autres, à accepter ou non.
 
 ## IOMMU
@@ -445,6 +445,14 @@ Compléments (proposé, 14 novembre 2026) :
 - **Réveils** : chaque minuteur déclare une tolérance ; le noyau regroupe les réveils dans cette tolérance pour laisser dormir les cœurs.
 - **Chaleur et batterie** : le service de placement réduit d'abord les budgets de la classe fond, puis ferme des cœurs rapides ; la classe image est touchée en dernier.
 - **Valeurs de départ, à calibrer** : période de la classe image égale à celle de l'écran (8,3 ms à 120 Hz) ; réserve de la classe image plafonnée à la moitié de chaque cœur rapide ; tranche de la classe fond de 10 ms.
+- **Charge des cœurs** (proposé) :
+  - Mesure : chaque noyau connaît la charge exacte de chaque contexte, puisqu'il débite les budgets. Il la publie dans une page en lecture seule que lit le service de placement, sans appel système. Pas d'estimation statistique à la Linux.
+  - Deux vitesses. Réflexe dans le noyau : un cœur sans travail demande par message un contexte prêt à un voisin, dans l'ensemble de cœurs que le service de placement a autorisé pour ce contexte. Politique en espace utilisateur : le service de placement rééquilibre, regroupe et choisit les types de cœurs, à l'échelle de quelques périodes.
+  - Fréquence à la demande : les échéances sont connues, donc la fréquence d'un cœur est choisie pour finir le budget juste avant l'échéance, au lieu de réagir après coup à la charge. Sur Intel, le matériel règle la fréquence lui-même (HWP, de mémoire) ; nous lui donnons par cœur les bornes et la préférence énergie ou performance selon la classe. Une entrée de l'utilisateur relève la fréquence du chemin de l'image avant que la charge n'arrive.
+  - Repos : sans tic, le prochain réveil de chaque cœur est connu exactement ; l'état de repos le plus profond compatible est choisi sans deviner.
+  - Cœurs à la demande : le nombre de noyaux actifs suit la charge (structure dynamique). Un cœur inutile est retiré, puis remis en route par le chemin normal.
+  - Indications du matériel sur la nature de chaque thread (Intel Thread Director, de mémoire) : une entrée de plus pour le service de placement.
+  - Deux fils d'un même cœur physique ne servent jamais deux éditeurs différents en même temps (canaux auxiliaires).
 - **Contrôles** : simulation déterministe de l'ordonnanceur (mêmes graines que les messages entre cœurs), et les portes de latence.
 
 ## Gestion de la mémoire (proposé, 14 novembre 2026)
@@ -458,9 +466,11 @@ Même partage que l'ordonnancement : mécanisme dans le noyau, politique en espa
 - **Espace d'adresses** : les tables de pages sont la seule source de vérité, sans seconde structure à garder cohérente (approche de CortenMM). Invalidation de TLB limitée au groupe de cœurs du processus.
 - **Tailles de page** : 2 Mo par défaut pour les mémoires Wasm et le code compilé, 4 Ko sinon. Une mémoire Wasm réserve son espace virtuel avec des pages de garde, ce qui retire les contrôles de bornes.
 - **Budget, sans surengagement** : chaque tâche porte un budget mémoire. Une page anonyme est comptée à la tâche au premier accès ; une page de blob partagé est comptée au système. Budget dépassé : erreur d'allocation rendue au runtime, pas de processus tué plus tard par surprise.
-- **Pression** : politique du service de mémoire, déjà notée (caches, compression des pages de fond, instantané des surfaces non visibles). Pas de mémoire d'échange en v1.
+- **Pression** : politique du service de mémoire. Dans l'ordre : vider les caches ; compresser en mémoire les pages des tâches de fond ; figer en instantané les surfaces non visibles et libérer leur mémoire ; déborder sur le disque. Tuer un processus sans instantané est le dernier recours, réservé au cas de force majeure (plus rien à libérer et une tâche de classe image menacée), et il est journalisé.
+- **Compression** : c'est l'équivalent de zram (pages compressées gardées en mémoire, sans disque), intégré au service de mémoire plutôt que déguisé en disque d'échange. L'équivalent de zswap (les pages compressées les plus froides débordent sur le disque) vient ensuite, vers une région chiffrée du magasin. Remplace la mention « pas de mémoire d'échange en v1 » : compression en v1, débordement sur disque après.
 - **Remise à zéro** : toute page est remise à zéro avant de changer de processus, par les cœurs économes au repos.
 - **Mémoire du GPU** : gérée par le service GPU avec les mêmes budgets par tâche. Les poids d'un modèle sont des blobs mappés, partagés entre processus.
+- **Mémoire du GPU pleine** (exigence de l'utilisateur : pas de plantage) : un tampon GPU est un objet mémoire qui peut résider en mémoire vidéo ou en mémoire centrale. Dans l'ordre : déplacer vers la mémoire centrale les tampons des tâches de fond et des surfaces non visibles ; pour l'inférence, faire passer des couches sur le processeur (llama.cpp le permet, de mémoire) ; laisser déborder la tâche demandeuse en mémoire centrale, plus lente mais vivante ; ensuite seulement la pression mémoire générale s'applique. Les applications lisent leur budget (extension Vulkan de budget mémoire, de mémoire). Ce que NVK et le cœur NVIDIA permettent comme éviction est à vérifier.
 - **Pilotes** : mémoire épinglée par une capacité à part, mappages IOMMU durables.
 - **Protections** : écriture ou exécution, jamais les deux (déjà noté) ; disposition aléatoire ; pages de garde autour des piles.
 - **Portes à ajouter** : coût d'un défaut de page mineur et d'un mappage par rapport à Linux ; mémoire d'un processus vide.
@@ -577,7 +587,7 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 - Sauvegarde : zones utilisateur et application, chiffrées avant l'envoi, vers un appareil du cercle, un disque externe ou un stockage objet de type S3. Incrémentale par construction (blobs désignés par hash). Restaurer : hash du système, liste des paquets, puis les objets. Changer de machine : appairage puis synchronisation.
 - Installateur : l'image USB est le système en session éphémère ; installer, c'est écrire les partitions et copier les blobs. Double amorçage : cohabitation sur un disque dédié ou un espace libre, sans redimensionner les partitions d'un autre système en v1. Emplacement de secours : image minimale avec réseau, stockage, réinstallation, restauration, diagnostic.
 - Firmwares : capsules UEFI ; source LVFS (de mémoire, à vérifier). Microcode : un blob du système, chargé par le noyau au démarrage.
-- Pression mémoire : chaque processus a un budget mémoire. Ordre : vider les caches, compresser les pages des tâches de fond, figer en instantané les surfaces non visibles et libérer leur mémoire. On ne tue jamais sans instantané. Pas de mémoire d'échange en v1.
+- Pression mémoire : chaque processus a un budget mémoire. Ordre : vider les caches, compresser les pages des tâches de fond, figer en instantané les surfaces non visibles et libérer leur mémoire. On ne tue jamais sans instantané. Compression en mémoire en v1, débordement sur disque ensuite.
 - Horloge : le noyau n'a qu'une horloge monotone. L'heure murale est un service (NTS), les fuseaux un blob.
 - Langues : ICU4X pour les locales ; moteurs de saisie en composants Wasm sans réseau, branchés sur le protocole de saisie ; anglais et français en v1 ; format des messages à choisir (Fluent ou MessageFormat 2).
 - Réglages : chaque service exporte ses réglages comme des actions avec schéma. L'écran des réglages est généré depuis le catalogue, et l'agent règle par le même chemin. Notifications : une surface du shell ; une notification porte des actions et une classe de priorité. Écran des droits : une requête sur l'arbre des capacités.
@@ -587,6 +597,7 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 
 - Pas de pare-feu séparé : le service réseau en tient lieu. Une application n'a aucun accès au réseau sans capacité, et la capacité porte sa portée (hôtes, ports, sortant ou entrant). Tout paquet entrant sans capacité d'écoute correspondante est jeté.
 - Ouvrir un port : l'application demande dans son manifeste une capacité d'écoute (protocole, port, portée : machine, cercle d'appareils, réseau local ou internet). L'utilisateur l'accorde à l'installation ou au premier usage ; sur un serveur, elle est écrite dans la configuration. Portée internet : le service réseau demande la redirection au routeur (PCP, UPnP), ou mieux, expose le service par le transport par clé, sans aucun port ouvert. Révoquer la capacité ferme le port.
+- Service exposé par clé : il n'écoute sur aucun port. La machine ouvre une connexion sortante vers un relais, puis le chemin direct s'établit quand c'est possible. Un balayage de l'adresse IP ne montre rien. La clé publique sert d'adresse, pas de secret : l'accès demande en plus une capacité remise par le propriétaire. Limites : le client doit parler notre transport, donc un navigateur ordinaire n'y arrive pas ; pour un site public, il faut un port classique ou une passerelle HTTPS. Le relais voit qui parle à qui, pas le contenu.
 - Ce qui reste d'un pare-feu : limitation de débit dans le service réseau, et une politique d'administration qui borne les capacités qu'on peut accorder.
 - DNS chiffré par défaut dans le service réseau ; mDNS local.
 - VPN : un composant WireGuard qui reçoit une capacité réseau et en fournit une autre.
@@ -628,20 +639,18 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 
 - Qui achète : (1) licence commerciale pour les fabricants d'appareils et intégrateurs qui ne veulent pas de l'AGPL ; (2) support et licence côté serveur ; (3) services facultatifs (relais, sauvegarde, magasin) ; (4) une machine de référence. À trancher.
 - Première démonstration publique, proposition : l'agent qui agit en sécurité sur des applications dans l'userland hébergé (étapes 1 à 3 de la piste hébergée), et le noyau qui démarre sous QEMU en passant l'oracle.
-- Calendrier (proposé ; estimations sans mesure, à recalculer à chaque jalon d'après le débit réel des agents) :
+- Calendrier (révisé le 14 novembre 2026 sur correction de l'utilisateur : avec une équipe d'agents, on compte en semaines). Hypothèse à recalculer dès la première semaine d'après les fusions mesurées :
 
   | Période | Piste hébergée | Piste noyau | Jalon |
   |---|---|---|---|
-  | Décembre 2026 | Étape 0 : dépôt modèle, CI, `AGENTS.md`, modèle de menace | idem | Socle prêt |
-  | T1 2027 | Runtime, outil `dodo`, surface | Démarrage, capacités, IPC, oracle (QEMU) | Porte IPC mesurée |
-  | T2 2027 | Actions et agent | SMP, ordonnancement, mémoire, premier processus natif | Première démonstration publique, papier de position |
-  | T3 2027 | Shell | IOMMU, pilotes NVMe, USB, réseau ; reprise d'un noyau de cœur | Démarrage sur le desktop de référence |
-  | T4 2027 | Magasin de blobs, paquets signés | Image serveur sans écran | Première image serveur |
-  | T1 2028 | | Cœur NVIDIA et NVK | Triangle Vulkan |
-  | 2028 | Convergence : Ladybird, compositeur réel, portes de latence, audio, veille | | Alpha sur le desktop de référence |
-  | 2029 | Portables, application compagnon | | Bêta |
+  | Semaine 1 | Étape 0, runtime, outil `dodo`, surface | Étape 0, démarrage sous QEMU | Socle prêt |
+  | Fin 2026 | Actions et agent, shell, magasin de blobs | Capacités, IPC, oracle, SMP, ordonnancement, mémoire | Première démonstration publique ; porte IPC mesurée |
+  | T1 2027 | Paquets signés | Pilotes, démarrage sur le desktop, reprise d'un noyau de cœur, image serveur, NVIDIA et NVK | Première image serveur ; triangle Vulkan |
+  | T2 2027 | Convergence : Ladybird, compositeur réel, portes de latence, audio, veille | | Alpha sur le desktop de référence |
+  | Second semestre 2027 | Portables, application compagnon | | Bêta |
 
-- Budget en jetons (proposé) : une enveloppe mensuelle fixée par l'utilisateur, montant à donner. Répartition de départ : noyau 45 %, userland 25 %, revue et vérification 20 %, recherche 10 %. Plafond par tâche ; au-delà, l'agent s'arrête et remonte (règle déjà dans le harnais). Modèle le plus capable pour la voie contrat, le noyau et les revues ; modèle économique pour la recherche et l'entretien. Le coût par fusion est mesuré et publié dans la CI, et sert à recalculer le calendrier.
+  Ce qui ne se compresse pas avec plus d'agents : la mise au point sur le matériel réel, le calibrage des portes sur la machine, la relecture de la voie contrat par deux humains, ce qui dépend de l'amont (threads Wasm, NVK), et le temps d'usage quotidien avant de dire « bêta ».
+- Coût des agents : ce n'est pas la contrainte. Le critère est le rapport qualité sur temps. Le travail se répartit entre plusieurs fournisseurs de modèles, avec un modèle économique en repli. Le plafond par tâche du harnais reste, comme garde-fou contre les boucles, pas comme limite de dépense.
 - Dépôt : `github.com/Vehicoule/dodOS` (public, créé le 13 novembre 2026, vide). Nom d'organisation : plus tard.
 - Télémétrie : aucune par défaut ; un rapport de panne part sur accord, rapport par rapport.
 - Accord de contribution : licence de contribution avec droit de relicencier, plutôt que cession. Texte et statut du code écrit par des agents : juriste.
