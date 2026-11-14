@@ -226,10 +226,10 @@ Pas d'arborescence globale. Le disque porte deux partitions, et le stockage se d
 
 Partitions : (1) partition EFI en FAT32, imposée par le firmware, qui porte les images de démarrage signées des emplacements A/B/R et n'est écrite que par la mise à jour ; (2) notre magasin, qui porte tout le reste, plus une petite région brute pour la trace de panne.
 
-| Zone | Contenu | Portée | Chiffrée | Sauvegardée, synchronisée | Durée de vie |
+| Zone | Contenu | Portée | Chiffrée | Octets copiés dans la sauvegarde de l'utilisateur | Durée de vie |
 |---|---|---|---|---|---|
-| Système | Blobs de l'image, désignés par le hash du système | Machine, lecture seule | Non (public, vérifié) | Non (retéléchargeable) | Jusqu'au retrait de l'emplacement |
-| Paquets | Blobs et manifestes des applications, modèles | Machine, partagés entre utilisateurs | Non | Non | Ramasse-miettes par références |
+| Système | Blobs de l'image, désignés par le hash du système | Machine, lecture seule | Non (public, vérifié) | Non : la sauvegarde garde le hash du système, les blobs se retéléchargent | Jusqu'au retrait de l'emplacement |
+| Paquets | Blobs et manifestes des applications, modèles | Machine, partagés entre utilisateurs | Non | Non : la sauvegarde garde la liste des paquets et leurs hash ; option « copie complète » pour un usage hors ligne | Ramasse-miettes par références |
 | Cache | Code compilé, vignettes, index | Machine ou utilisateur | Selon l'origine | Non | Effaçable à tout moment |
 | Appareil | Clés d'appairage, réseaux, réglages matériels | Machine, disponible avant la session | Oui, clé du TPM | Non | Jusqu'à la remise à zéro |
 | Utilisateur | Collections de la personne, mémoire de l'agent, versions | Un utilisateur | Oui, clé de l'utilisateur | Oui | Permanente |
@@ -238,8 +238,11 @@ Partitions : (1) partition EFI en FAT32, imposée par le firmware, qui porte les
 | Éphémère | Fichiers temporaires, session invitée | Une tâche ou une session, en mémoire | Sans objet | Non | Fin de la tâche |
 | Étranger | Clés USB, disques d'autres systèmes, partages réseau | Vu comme une collection, par un composant lecteur | Selon le support | Non | Tant que le support est branché |
 
+- Le format sur disque ne change pas (ligne « Stockage » des décisions) : SQLite pour les métadonnées, blobs immuables pour les données. Les zones sont des portées logiques dans ce magasin, pas des systèmes de fichiers séparés.
+- Comparaison avec Fuchsia (vérifié le 14 novembre 2026, documentation officielle) : bootfs (image en lecture seule chargée au démarrage) correspond à notre image de démarrage signée ; blobfs (paquets, adressés par contenu) à nos zones système et paquets ; minfs puis Fxfs (données modifiables) à nos objets. Fuchsia a accepté de ranger les blobs dans Fxfs et de supprimer son gestionnaire de volumes (RFC-0225) : un seul magasin, comme nous.
 - La vue POSIX des logiciels portés est fabriquée par la table de noms du processus : `/tmp` vers la zone éphémère, le dossier personnel vers la zone d'application.
 - Remise à zéro : effacer les zones appareil et utilisateur. Embarqué : zones système et appareil seulement.
+- Réponses proposées aux points ouverts ci-dessous : (1) un second type d'objet, modifiable par extents, copie sur écriture, somme de contrôle par bloc, sans arbre de Merkle ; ses versions sont des instantanés ; les bases SQLite des applications y vivent. (2) Un disque pour le magasin en v1 ; un autre disque est un magasin de plus où placer des zones ; miroir plus tard. (3) Le quota est porté par la capacité de la collection. (4) Toutes les versions pendant 30 jours, puis une par jour, puis une par semaine ; réglable. (5) Pas de mémoire d'échange en v1 (voir pression mémoire). (6) Accepté ; une installation privée va dans la zone de l'utilisateur.
 - Ouvert : (1) objets très modifiés (base de données d'une application, image disque) : une suite de blobs immuables coûte cher en écritures aléatoires, il faut sans doute un type d'objet modifiable par extents, sans arbre de Merkle ; (2) plusieurs disques, miroir ; (3) quotas par application ; (4) durée de garde des versions ; (5) mémoire d'échange : compression d'abord, région chiffrée ensuite, à décider ; (6) les paquets installés par un utilisateur sont visibles des autres, à accepter ou non.
 
 ## IOMMU
@@ -536,15 +539,70 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 - 32 bits.
 - Auto-hébergement du développement.
 
-## Ce qui n'est pas encore traité (relevé du 14 novembre 2026)
+## Réponses proposées aux manques (14 novembre 2026, à valider)
 
-- **Système** : comptes, session, plusieurs utilisateurs, récupération d'une clé perdue ; sauvegarde, restauration, changement de machine ; installateur, premier démarrage, double amorçage, contenu de l'emplacement de secours ; mises à jour des firmwares et du microcode ; pression mémoire ; horloge, fuseaux, synchronisation de l'heure ; langues, écritures, méthodes de saisie ; réglages, notifications, écran des droits ; impression, numérisation.
-- **Réseau** : DNS, VPN, pare-feu exprimé en capacités, Wi-Fi (ouvert).
-- **Médias** : codecs et leurs brevets, vidéo protégée (DRM) dans le navigateur, polices et leurs licences.
-- **Serveur** : ce qu'un serveur DodOS exécute (composants `wasi:http`, bases de données), administration à distance.
-- **Développeur** : terminal et langage de shell, compiler sur DodOS même, débogage, profilage, traces.
-- **Sécurité** : modèle de menace écrit, gestion des clés de signature, réponse aux failles, canaux auxiliaires entre composants d'un même processus.
-- **Projet** : qui achète et quoi, calendrier et jalons, première démonstration publique, coût en jetons des agents, accord de contribution (obligatoire pour la double licence), statut du droit d'auteur sur le code écrit par des agents (à poser au juriste), marque, politique de télémétrie.
+**Système**
+
+- Comptes : un utilisateur est une clé. Session ouverte par un code vérifié par le TPM ; biométrie plus tard. Aucun compte en ligne obligatoire. Pas de super-utilisateur : administrer, c'est détenir les capacités d'administration de l'appareil, remises au premier utilisateur. Plusieurs utilisateurs prévus dans la conception (zones par utilisateur) ; la v1 n'expose qu'un utilisateur et la session invitée.
+- Clé perdue : clé de récupération remise à l'installation ; un autre appareil du cercle peut redonner la clé ; partage entre proches plus tard. Aucun séquestre chez nous.
+- Sauvegarde : zones utilisateur et application, chiffrées avant l'envoi, vers un appareil du cercle, un disque externe ou un stockage objet de type S3. Incrémentale par construction (blobs désignés par hash). Restaurer : hash du système, liste des paquets, puis les objets. Changer de machine : appairage puis synchronisation.
+- Installateur : l'image USB est le système en session éphémère ; installer, c'est écrire les partitions et copier les blobs. Double amorçage : cohabitation sur un disque dédié ou un espace libre, sans redimensionner les partitions d'un autre système en v1. Emplacement de secours : image minimale avec réseau, stockage, réinstallation, restauration, diagnostic.
+- Firmwares : capsules UEFI ; source LVFS (de mémoire, à vérifier). Microcode : un blob du système, chargé par le noyau au démarrage.
+- Pression mémoire : chaque processus a un budget mémoire. Ordre : vider les caches, compresser les pages des tâches de fond, figer en instantané les surfaces non visibles et libérer leur mémoire. On ne tue jamais sans instantané. Pas de mémoire d'échange en v1.
+- Horloge : le noyau n'a qu'une horloge monotone. L'heure murale est un service (NTS), les fuseaux un blob.
+- Langues : ICU4X pour les locales ; moteurs de saisie en composants Wasm sans réseau, branchés sur le protocole de saisie ; anglais et français en v1 ; format des messages à choisir (Fluent ou MessageFormat 2).
+- Réglages : chaque service exporte ses réglages comme des actions avec schéma. L'écran des réglages est généré depuis le catalogue, et l'agent règle par le même chemin. Notifications : une surface du shell ; une notification porte des actions et une classe de priorité. Écran des droits : une requête sur l'arbre des capacités.
+- Impression et numérisation : protocoles sans pilote (IPP Everywhere, eSCL), en composant, après la v1.
+
+**Réseau**
+
+- Pas de pare-feu au sens classique : sans capacité réseau, pas de réseau. La capacité porte sa portée (hôtes, ports, sortant ou entrant) ; écouter est une capacité à part.
+- DNS chiffré par défaut dans le service réseau ; mDNS local.
+- VPN : un composant WireGuard qui reçoit une capacité réseau et en fournit une autre.
+- Wi-Fi : reste ouvert (comparaison Linux et Fuchsia prévue).
+
+**Médias**
+
+- Codecs libres d'abord (AV1, VP9, Opus, FLAC). H.264 et AAC par FFmpeg et Vulkan Video ; brevets à poser au juriste.
+- Vidéo protégée : aucune voie vers Widevine aujourd'hui. Un navigateur indépendant attend encore sa licence (Zen), et rien trouvé sur EME dans Ladybird (recherche du 14 novembre 2026, sources communautaires). Position : limite assumée et affichée ; le contournement est la diffusion depuis un autre appareil. À réévaluer avec du volume.
+- Polices : une famille système sous licence OFL, Noto pour la couverture des écritures et les emoji.
+
+**Serveur**
+
+- Exécute des composants `wasi:http` lancés à la requête ; logiciels natifs par POSIX en bibliothèque, plus tard.
+- Administration : pas de shell root distant. L'outil `dodo` et l'agent passent par le transport par clé, avec des capacités d'administration déléguées. La configuration d'un serveur est un hash.
+- Arguments : reprise d'un noyau de cœur, mise à jour du noyau sans redémarrage, démarrage en une seconde.
+
+**Développeur**
+
+- Terminal : une application. Shell : en porter un existant à données structurées (candidat Nushell, à vérifier), dont les commandes sont les actions ; pas de nouveau langage.
+- Compiler sur DodOS : pas un but de la v1 ; on développe depuis Linux et macOS avec l'userland hébergé.
+- Débogage : une capacité par composant (déjà noté). Traces : la boîte noire, exportée dans un format standard (Perfetto, à vérifier).
+
+**Sécurité**
+
+- Modèle de menace : une page, à l'étape 0. Attaquants : application malveillante, contenu web, injection de prompt, périphérique branché, voleur de la machine, réseau. Hors périmètre : firmware compromis, attaque physique avancée.
+- Clés de signature : rôles TUF, racine hors ligne sur clés matérielles, seuil de deux clés sur trois (une par personne, une au coffre).
+- Failles : fichier `SECURITY.md`, délai de divulgation de 90 jours, suivi des correctifs du noyau Linux à support long et de Ladybird.
+- Canaux auxiliaires : la règle « un processus par éditeur » borne déjà le partage ; protections Spectre de Wasmtime actives ; horloge de précision réduite pour le contenu non fiable.
+- Classe d'effet déclarée par l'application (faiblesse relevée) : la classe déclarée fixe les capacités remises pour l'appel. Une action `read` ne reçoit que des capacités en lecture et pas de réseau ; `reversible` ne reçoit que du stockage versionné ; seule `external` reçoit le réseau. Mentir sur la classe ne donne donc rien de plus.
+
+**Workflow**
+
+- Fusion : voie contrat (WIT, ABI, interfaces du noyau, portes), accord des deux humains ; voie fonction, un humain ; voie entretien, fusion automatique quand les contrôles passent.
+- Fiches de décision : dans le dépôt commun de la documentation, puisque les décisions traversent les dépôts.
+- Multithread : hypothèse de travail, les groupes de cœurs par messages (la reprise d'un noyau de cœur les favorise) ; le journal répliqué reste le point de comparaison à mesurer.
+
+**Projet** (décisions de l'utilisateur ; recommandations)
+
+- Qui achète : (1) licence commerciale pour les fabricants d'appareils et intégrateurs qui ne veulent pas de l'AGPL ; (2) support et licence côté serveur ; (3) services facultatifs (relais, sauvegarde, magasin) ; (4) une machine de référence. À trancher.
+- Première démonstration publique, proposition : l'agent qui agit en sécurité sur des applications dans l'userland hébergé (étapes 1 à 3 de la piste hébergée), et le noyau qui démarre sous QEMU en passant l'oracle.
+- Calendrier, jalons, budget en jetons : à fixer avec le plan d'implémentation.
+- Télémétrie : aucune par défaut ; un rapport de panne part sur accord, rapport par rapport.
+- Accord de contribution : licence de contribution avec droit de relicencier, plutôt que cession. Texte et statut du code écrit par des agents : juriste.
+- Nom (vérifié le 14 novembre 2026) : pas d'organisation GitHub `dodos` ; `dodos.org` (2010) et `dodos.io` (2021) sont pris, `dod-os.org` est libre. Marque non vérifiée.
+
+Restent ouverts, à voir ensemble : structure des jetons du design system, extension du catalogue, placement de la surface de l'agent, Wi-Fi, FRED sur le processeur de référence, relecture des « Contrôles par étape ».
 
 ## Questions ouvertes
 
