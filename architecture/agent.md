@@ -23,7 +23,7 @@ The agent is the AI assistant built into the system. It acts for the user throug
 
 The `agent` world ([contracts/core.wit](../contracts/README.md)) exports one function, `handle`, called once per user request with the user's words, a `task` and an `overlay` surface.
 
-- The **task** is the unit of delegation ([contracts/actions.wit](../contracts/README.md)). It carries the delegated rights, the marks and the journal, and is revocable as a whole. Everything the agent can do comes from it, and nothing survives it.
+- The **task** is the unit of delegation ([contracts/actions.wit](../contracts/README.md)). It carries the delegated rights, the marks and the journal, and is revocable as a whole. Everything the agent can do comes from it, and nothing survives it. In the kernel, the mechanism is a `task` object that carries the marks and stops the task's threads in one operation; the delegated rights are capabilities that the supervisor then removes (D-110, proposed; see [Tasks and marks](kernel-interface.md#tasks-and-marks)).
 - Through the task the agent reads its marks, lists the actions of its scope (`available`), invokes one (`invoke`), undoes one journal entry (`undo`), reads the journal, and creates a sub-task with a subset of the scope.
 - The world imports `inference`, `memory` and `audio`. These three interfaces are stubs in the contract: nothing is fixed yet.
 

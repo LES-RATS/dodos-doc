@@ -6,9 +6,9 @@ The split is the same as for scheduling: the mechanism is in the kernel and the 
 
 ## Kernel memory
 
-- **No heap in the kernel.** All the memory the kernel needs for an object comes from a memory capability supplied by whoever creates the object (model of seL4, from memory). A program therefore cannot exhaust kernel memory.
+- **No heap in the kernel.** All the memory the kernel needs for an object comes from a memory capability supplied by whoever creates the object (model of seL4, from memory). A program therefore cannot exhaust kernel memory. The exact rule is rule 3 of the [kernel interface](kernel-interface.md#rules): no kernel memory that grows at run time; only fixed tables sized when a node starts (the interrupt table, the IOMMU units) and the start-up objects are outside any untyped (D-110).
 - **Memory service** (**Decided**). The memory service, in user space, holds the memory capabilities and supplies pages and page tables at the time of a page fault. The page reserve of each kernel is an advance that the memory service handed to it.
-- **Physical memory per core.** Each kernel has its own page reserve, without locks; the reserves are rebalanced by messages.
+- **Physical memory per core.** Each kernel has its own share of physical memory, without locks. The shares are fixed at start-up (D-107, and their split in [Start-up state](kernel-interface.md#start-up-state)); memory of another share is used through remote mappings recorded on both sides.
 - **NUMA** (machines whose memory is split between processor sockets) is out of scope as long as no target has it (**Decided**).
 
 ## Memory objects
@@ -23,7 +23,7 @@ A **memory object** (model of Fuchsia) is a set of pages designated by a capabil
 
 ## Address space
 
-- Page tables are the only source of truth, with no second structure to keep coherent (approach of CortenMM). This lead is **Aligned** (retained, to be designed; second delegated study of 14 November 2026, not cross-checked): the page table as the only representation, with a minimal, verified concurrent part; CortenMM (SOSP 2025) is announced as 1.2 to 26 times faster than Linux.
+- Page tables are the only structure that translates (approach of CortenMM). The mapping record in a frame capability names a mapping and is kept coherent with it by the kernel; it is not a second translation map (see [Mapping records](kernel-interface.md#mapping-records)). This lead is **Aligned** (retained, to be designed; second delegated study of 14 November 2026, not cross-checked): the page table as the only representation, with a minimal, verified concurrent part; CortenMM (SOSP 2025) is announced as 1.2 to 26 times faster than Linux.
 - TLB invalidation (flushing the processor's cache of address translations) is limited to the core group of the process. With one kernel per core, each core has its own copy of the page table (see [kernel.md](kernel.md#multi-core-structure)).
 - Memory copy as a kernel service with a deadline (Copier, SOSP 2025): **Aligned** (retained, to be designed; same study, not cross-checked).
 
@@ -31,7 +31,7 @@ A **memory object** (model of Fuchsia) is a set of pages designated by a capabil
 
 - 4 KB by default. 2 MB pages for Wasm memories and compiled code only above a size threshold (**Decided**).
 - A Wasm memory reserves its virtual space with guard pages, which removes bounds checks. This holds for 32-bit memories only (**Decided**).
-- 1 GB pages, for inference, come after the alpha (**Decided**).
+- 1 GB pages, for inference, come after the alpha (**Decided**). The kernel supports them from its first version (D-110).
 
 ## Budget, without overcommit
 
@@ -57,8 +57,8 @@ Pressure handling is the policy of the memory service. It does not assume proces
 
 ## Other rules
 
-- **Zeroing.** Every page is zeroed before it changes process, by idle efficiency cores.
-- **Drivers.** Pinned memory through a separate capability, and long-lived IOMMU mappings (see [drivers.md](drivers.md#iommu)).
+- **Zeroing.** Every page is zeroed before it changes process, by idle efficiency cores. A frame the kernel makes is already zero (D-110, proposed: [rules of `untyped_retype`](kernel-interface.md#capabilities-and-objects)); the memory service zeroes the pages it moves from one process to another without passing through an untyped.
+- **Drivers.** Pinned memory through a separate capability, and long-lived IOMMU mappings (see [drivers.md](drivers.md#iommu)). The separate capability is a derived frame capability mapped in the driver's `iospace`: the frame cannot be freed while that mapping exists, and revoking the capability unmaps it from the device first ([IOMMU](kernel-interface.md#iommu)).
 - **Protections.** Write or execute, never both; address space layout randomisation; guard pages around stacks.
 - **GPU memory.** See [gpu.md](gpu.md#gpu-memory).
 

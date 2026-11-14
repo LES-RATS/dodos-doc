@@ -53,7 +53,7 @@ These precedents concern the variants described in [kernel.md](../architecture/k
 1. Provenance carried by IPC and enforced by the kernel, to bound what an agent can do with untrusted content.
 2. A multikernel by messages with no shared state, with distributed capability revocation and per-core kernel recovery, backed by formal models. The replicated log remains only a measured comparison point (reworded and **Decided**, 14 November 2026).
 3. A kernel written from a model by agents, with a differential oracle and bounded proofs.
-4. The task as a kernel object: a single object gathers the delegated rights, the time budget, the provenance label and the log of an agent task, revocable in one operation.
+4. The task as a kernel object: a single object gathers the delegated rights, the time budget, the provenance label and the log of an agent task, revocable in one operation. As the kernel contract now writes it (D-110, proposed, awaiting the two owners): the task object gathers the provenance marks and the threads of an agent task and stops them in one operation; its rights are removed with its capability spaces, its time is the scheduling contexts of its threads, and its log is the runtime's journal keyed by the task identifier the kernel stamps ([Tasks and marks](../architecture/kernel-interface.md#tasks-and-marks)).
 5. No executable page outside the compile service, enforced by the kernel.
 
 The recovery of one core's kernel, now part of axis 2, was first recorded as a candidate for a further axis to claim (see [kernel.md](../architecture/kernel.md#recovery-of-one-cores-kernel)).
