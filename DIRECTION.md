@@ -362,6 +362,55 @@ Chaque couche d'isolation a un budget, mesuré à chaque fusion contre une réf�
 
 Le runtime de la NASA (SpaceWasm, JPL) est un interpréteur Wasm 1.0 conçu pour la sûreté et le déterminisme, pas pour la vitesse : rien à en tirer sur ce point.
 
+## Réservoir d'idées (exploration, rien de décidé)
+
+Un nouvel OS est l'occasion d'explorer. Idées connues ou non ; la nouveauté n'est vérifiée pour aucune. Une étoile marque celles que je proposerais d'étudier en premier.
+
+**Bas niveau, noyau**
+
+- ★ Instantané d'un processus comme primitive : l'état d'un composant Wasm est explicite (mémoire linéaire, tables, handles), donc il se fige, se range dans le stockage et reprend. Ouvre la reprise exacte après redémarrage ou mise à jour, la migration vers un autre appareil, le retour arrière. Ancêtres : persistance orthogonale d'EROS et KeyKOS.
+- ★ Noyau spécialisé à l'installation : le service de compilation construit le noyau pour la machine exacte (FRED ou IDT, APX, nombre et type de cœurs), sans test de fonctionnalité à l'exécution. Le système étant un hash, chaque variante reste vérifiable.
+- La page d'appels système comme optimiseur : puisqu'aucun appel n'est fait en direct, le noyau choisit par machine entre appel immédiat, exécution en mode utilisateur et mise en lot dans un anneau, et peut en changer à chaque version.
+- Anneaux de messages comme IPC principal pour l'asynchrone (le défaut de l'ABI), chemin rapide synchrone à côté. Ancêtres : FlexSC, io_uring, sDDF.
+- Tables de pages partagées par hash : le code compilé d'un blob est immuable, donc ses pages et leurs sous-arbres de table de pages se partagent entre processus.
+- Grandes pages par défaut pour les mémoires linéaires Wasm ; remise à zéro de la mémoire libérée par les cœurs économes au repos.
+- Exécution déterministe : les imports d'un composant sont enregistrés, donc une tâche se rejoue à l'identique (audit de l'agent, débogage).
+
+**Performance**
+
+- ★ Compilation optimisée distribuée : l'étage optimisé tourne chez l'éditeur ou sur un service, et le code machine arrive signé, indexé par hash du composant et jeu d'instructions. Pas de LLVM sur la machine. Demande une compilation reproductible. Ancêtre : profils cloud d'ART.
+- ★ Lancement par instantané : l'initialisation d'un composant est exécutée à l'installation (comme Wizer), le lancement ne fait que mapper le résultat.
+- Caches par hash partagés avec les paquets : pipelines GPU compilés, images décodées, polices rastérisées.
+- Préchauffage par l'agent : il connaît l'intention, donc il prépare le composant suivant avant la demande.
+- Rôles par type de cœur : chemin de l'image sur les cœurs rapides ; compilation, hachage, indexation et inférence de fond sur les cœurs économes.
+- Files NVMe et réseau par cœur, mappées dans le service qui les sert.
+
+**Survie de l'écosystème, sans tout porter de Linux**
+
+- ★ Porter les boîtes à outils, pas les applications : Flutter, Qt, Slint, egui, Dioxus, Tauri et SDL visant `wasi:webgpu` et notre surface apportent leurs applications d'un coup.
+- ★ Usine de portage par agents : une chaîne nocturne compile des applications libres en composants Wasm, leurs tests servant d'oracle, et publie celles qui passent.
+- ★ Le pilote Linux comme oracle : un agent écrit un pilote natif, et on compare sa trace (MMIO, DMA, interruptions) à celle du pilote Linux sous émulation, comme seL4 sert d'oracle au noyau.
+- Pilotes de classe natifs d'abord : NVMe, AHCI, xHCI, classes USB (HID, audio, stockage, caméra, réseau), HDA, HCI Bluetooth, virtio. Une quinzaine de pilotes couvrent la plupart des périphériques.
+- Périphériques par le web : WebUSB, WebHID, WebSerial et Web Bluetooth dans notre moteur, adossés à des capacités ; les outils de configuration des fabricants existent déjà sous cette forme.
+- L'userland hébergé comme produit : le shell et l'agent tournent sur Linux et macOS avant que le noyau existe, donc l'écosystème démarre sans attendre le matériel.
+- Surface distante : une application Linux ou Windows tournant sur une autre machine ou dans le cloud s'affiche comme une surface. Les VM locales restent hors périmètre.
+- L'agent remplace la longue traîne : un applet généré à la demande tient lieu de petite application.
+- Lecteurs de formats et de systèmes de fichiers étrangers en composants Wasm, pour importer ses données.
+- Une machine de référence vendue ou recommandée, plutôt que tous les PC.
+
+**Expérience**
+
+- ★ Rien ne se ferme, rien ne se perd : avec l'instantané de processus, un redémarrage ou une mise à jour rend chaque surface dans son état exact.
+- ★ Ligne de temps globale : objets versionnés et journal des effets donnent une annulation à l'échelle du système.
+- ★ Inspecteur « pourquoi » : pointer n'importe quel pixel dit qui l'a dessiné, ce que ce composant peut atteindre et ce qu'il a fait.
+- Accorder par le geste : choisir un fichier ou le glisser, c'est le donner ; aucune boîte de permission. Ancêtres : powerbox de CapDesk et de macOS.
+- Automatisation par démonstration : les actions étant typées, ce que fait l'utilisateur s'enregistre en script rejouable.
+- Notifications à budget : interrompre est une capacité, avec un quota ; l'agent trie le reste.
+- Continuité : déplacer une surface en cours vers un autre appareil.
+- Présence partagée : l'agent et l'utilisateur agissent sur la même surface, l'agent montre ce qu'il fait.
+- Session invitée instantanée : prêter la machine avec un jeu de capacités réduit.
+- Recherche sémantique locale sur tous les objets, avec leur provenance.
+
 ## Matériel de référence
 
 1. Desktop Intel + NVIDIA : en premier (décidé). Ni batterie ni Wi-Fi obligatoire. Le processeur n'a pas de GPU intégré : premiers pixels par le framebuffer du firmware (UEFI GOP), puis NVIDIA seul. Le chemin Intel se développe sur le Dell.
@@ -418,15 +467,17 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
   - À ne pas présenter comme nouveau : tâches spéculatives (« Fork, Explore, Commit », arXiv 2602.08199, et « Externalization Barriers », AgenticOS '26, déjà publiés avec du code) ; aucune page exécutable hors service de compilation (iOS et Singularity) ; capacités à budget (seL4 MCS et Cinder) ; explication de l'autorité (une requête sur l'arbre de dérivation) ; noyau par type de cœur (Barrelfish/DC et Popcorn). Ils restent utiles au produit.
   - Faiblesses à traiter : tout devient vite « non fiable » et l'utilisateur confirme tout ; une étiquette ne suit pas l'influence du contenu sur la décision du modèle ; une application peut mentir sur la classe d'effet de ses actions ; un effet externe ne s'annule pas ; un budget copié devient un compteur partagé.
 - Pistes issues de la recherche récente (seconde étude DeepSeek du 14 novembre 2026, non recoupée ; chiffres à relire dans les articles) :
-  - Retenues pour étude : (a) ordonnancement ancré sur l'écran : pas de tic, le rafraîchissement ouvre chaque période, et les soumissions GPU entrent dans le même graphe d'échéances que le processeur ; aucun noyau trouvé qui le fasse. (b) Contrats de latence portés par les capacités, avec admission au moment de l'octroi et un modèle que l'agent peut interroger ; par budgets mesurés, le pire cas calculé sur du Wasm étant irréaliste. (c) Capacités typées par WIT : le compilateur émet le manifeste, `own` et `borrow` deviennent dérivation et atténuation ; c'est déjà notre conception, et elle ne semble pas publiée. (d) Manifeste de pilote déduit de traces (plages MMIO, fenêtres DMA par anneau, interruptions), la relecture portant sur la différence à chaque mise à jour ; limite : les chemins rares (veille, erreurs) manquent aux traces. (e) Mémoire à la CortenMM (SOSP 2025) : la table de pages comme seule représentation, partie concurrente minuscule et vérifiée ; annoncé 1,2 à 26 fois plus rapide que Linux. (f) Copie mémoire comme service du noyau avec échéance (Copier, SOSP 2025). (g) Interruptions utilisateur (xUI, ASPLOS 2025 ; Aeolia, SOSP 2025) pour livrer un événement à un composant sans entrer dans le noyau. (h) Flux (types de raffinement pour Rust) comme outil de preuve : TickTock (SOSP 2025) a vérifié l'isolation de Tock et trouvé sept bugs.
-  - Matériel : FRED (nouvelle livraison d'événements x86, pile choisie par niveau) convient à un noyau sans pile par thread, et aucun article ne l'évalue ; à vérifier : notre processeur de référence l'a-t-il ? Le chemin classique par IDT reste obligatoire. APX (32 registres généraux, annoncé pour Nova Lake) : prévoir un format de message IPC en registres plus large. LAM à ne pas utiliser (attaque SLAM, désactivé dans Linux). CET à exiger. « Cœur unifié » d'Intel vers 2028 : rumeur ; ne pas trop investir dans la distinction P et E.
-  - Écartées : espace d'adresses unique entre composants par clés de protection (contredit notre règle d'un processus par éditeur, et les clés du mode utilisateur sont modifiables par le code) ; placement par domaine sur cœurs P et E ; modèle de langage dans le noyau.
+  - Retenues (accord de l'utilisateur, à concevoir) : (a) ordonnancement ancré sur l'écran : pas de tic, le rafraîchissement ouvre chaque période, et les soumissions GPU entrent dans le même graphe d'échéances que le processeur ; aucun noyau trouvé qui le fasse. (b) Contrats de latence portés par les capacités, avec admission au moment de l'octroi et un modèle que l'agent peut interroger ; par budgets mesurés, le pire cas calculé sur du Wasm étant irréaliste. (c) Capacités typées par WIT : le compilateur émet le manifeste, `own` et `borrow` deviennent dérivation et atténuation ; c'est déjà notre conception, et elle ne semble pas publiée. (d) Manifeste de pilote déduit de traces (plages MMIO, fenêtres DMA par anneau, interruptions), la relecture portant sur la différence à chaque mise à jour ; limite : les chemins rares (veille, erreurs) manquent aux traces. (e) Mémoire à la CortenMM (SOSP 2025) : la table de pages comme seule représentation, partie concurrente minuscule et vérifiée ; annoncé 1,2 à 26 fois plus rapide que Linux. (f) Copie mémoire comme service du noyau avec échéance (Copier, SOSP 2025). (g) Interruptions utilisateur (xUI, ASPLOS 2025 ; Aeolia, SOSP 2025) pour livrer un événement à un composant sans entrer dans le noyau. (h) Flux (types de raffinement pour Rust) comme outil de preuve : TickTock (SOSP 2025) a vérifié l'isolation de Tock et trouvé sept bugs.
+  - Matériel : FRED (nouvelle livraison d'événements x86, pile choisie par niveau) convient à un noyau sans pile par thread, et aucun article ne l'évalue ; à vérifier : notre processeur de référence l'a-t-il ? Le chemin classique par IDT reste obligatoire. APX (32 registres généraux, annoncé pour Nova Lake) : prévoir un format de message IPC en registres plus large. LAM à ne pas utiliser (attaque SLAM, désactivé dans Linux). CET à exiger. La distinction entre types de cœurs est à traiter comme durable (décidé) : Arm, Apple, Intel et AMD y convergent ; la rumeur d'un « cœur unifié » d'Intel vers 2028 ne change pas ce choix.
+  - Écartées : espace d'adresses unique entre composants par clés de protection (contredit notre règle d'un processus par éditeur, et les clés du mode utilisateur sont modifiables par le code) ; modèle de langage dans le noyau.
+  - Cœurs hétérogènes, retenu : la classe de cœur fait partie du contrat d'une capacité d'ordonnancement (chemin de l'image sur cœurs rapides, travail de fond sur cœurs économes), et un noyau par cœur autorise un binaire réglé par type de cœur.
   - Concurrent direct : Agate (AgenticOS '26), micronoyau à capacités pour agents, AArch64, sans évaluation ni preuve. WALI (EuroSys 2025) : Wasm au-dessus des appels système, à citer pour dire ce qu'on supprime.
 - Structure dynamique (proposé) : le nombre de cœurs actifs et leur attribution suivent la charge. Barrelfish/DC ajoute, retire et remplace un cœur à chaud (retrait en 0,0008 ms contre 2 542 ms pour Linux 3.13, chiffres des auteurs). Le réplica d'un processus n'existe que sur les cœurs où il a un thread. Variante à comparer au journal répliqué : un noyau par groupe de cœurs, le groupe d'un processus multithread partageant un seul noyau avec un verrou court, et changeant de taille selon la charge (précédents : Popcorn, un noyau par cœur ou par groupe ; NrOS, par nœud NUMA).
 - Emprunts à étudier, de mémoire, à vérifier dans les articles : HongMeng (classes d'isolation différenciées, services regroupables dans un même espace d'adresses sans changer leur code, pas d'état tenu en double) ; sDDF de LionsOS (files sans verrou à un producteur et un consommateur en mémoire partagée, pilotes à un thread) ; seL4 MCS (le temps comme capacité, pour nos classes de latence) ; Barrelfish (cœurs traités comme des périphériques, état du noyau externalisé en capacités) ; NrOS (bibliothèque de réplication, table de pages vérifiée) ; Asterinas (socle `unsafe` minimal et audité).
 - Publications : papier de position tôt (OS sûr pour un agent : classes d'effet, provenance, confirmations), puis papiers de mesure une fois les portes en place (oracle différentiel et développement par agents, réutilisation des pilotes Linux sans VM, Wasm comme seule ABI). Les portes fournissent les chiffres. Le papier de position n'est pas en terrain vierge : AgentKernel (arXiv 2609.29647, septembre 2026) propose déjà des étiquettes de provenance dans un « OS pour agent » ; le lire avant d'écrire. Papier d'architecture : thèse défendable « l'avantage du monolithique s'érode », pas « il va disparaître ».
 - Design system : voir la section. Structure des jetons à décider, extension du catalogue pour les applications natives.
 - Workflow : qui des deux humains fusionne quoi ; fiches de décision dans chaque dépôt ou dans un dépôt commun. La CI proposée a été jugée insuffisante une première fois : la liste « Contrôles par étape » attend une relecture.
+- Lecture du code des noyaux dont on s'inspire (proposé) : lire est licite, le droit d'auteur protège l'expression et non les idées ; le risque est qu'un agent traduise de près, ce qui fait une œuvre dérivée. Sources permissives, lecture libre avec attribution : Barrelfish (MIT), Zircon (de mémoire BSD/MIT), cœur NVIDIA (MIT, vérifié dans le dépôt). Copyleft faible : Asterinas (MPL-2.0), lecture oui, copie de fichiers non. seL4 (noyau GPLv2, vérifié) : deux agents séparés, l'un lit et rédige une spécification en prose, l'autre implémente sans voir le code ; c'est ce qui protège la licence commerciale. Avis juridique à prendre avant la première version.
 - Preuve formelle du noyau : hors de portée en entier (Zig n'a pas d'outil de preuve). Piste partielle : Verus sur la logique Rust (capacités, cycle de vie des objets). Précédent : Atmosphere, micronoyau Rust de 6 000 lignes vérifié avec Verus en moins de 2,5 années-personne (SOSP 2025), avec un verrou global. Kani (vérification bornée, sans annotations, sait traiter le code `unsafe`) en complément, dans la CI : absence de panique, de débordement et d'erreur mémoire.
 - Arbre d'interface : écrire le catalogue DodOS au format A2UI. Placement et taille de la surface de l'agent.
 - Accord de cession des contributeurs, nécessaire à la double licence.
