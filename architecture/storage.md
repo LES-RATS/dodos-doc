@@ -21,7 +21,7 @@ Consistency (**Decided**, 14 November 2026):
 - There is one SQLite database per key domain: one for the machine and one for each user.
 - An order is imposed between databases: allocate and commit in the machine database, reference afterwards, collect the leaks. This is tested by injecting power cuts.
 - Deduplication does not cross two encrypted zones.
-- Application databases live on simple extent files, allocated in large chunks.
+- Version 1 has one mutable type for heavily rewritten data: simple extent files, allocated in large chunks, used by application databases. Copy-on-write extents, per-block checksums and snapshot-based versions for that type are deferred until after the alpha.
 - The store format stays readable by the previous version of the system, and this is tested.
 - The store keeps a space reserve for the disk-full case, supports TRIM, and keeps copies and checksums of the database.
 - The ABI has a durability point (`sync`).
@@ -71,11 +71,11 @@ Notes:
 
 ## Open points and proposed answers
 
-Each point below is **Open**, with a **Proposed** answer.
+Each point below is **Open**, with a **Proposed** answer, except point 1, which is **Decided** (14 November 2026).
 
 | # | Open point | Proposed answer |
 |---|---|---|
-| 1 | Heavily modified objects (an application's database, a disk image): a sequence of immutable blobs is expensive in random writes; a modifiable object type by extents, without a Merkle tree, is probably needed | A second object type, modifiable by extents, copy-on-write, with a checksum per block and no Merkle tree; its versions are snapshots. For application databases, see the decision above (simple extent files) and the [recorded conflict](../research/open-questions.md#recorded-conflicts) |
+| 1 | Heavily modified objects (an application's database, a disk image): a sequence of immutable blobs is expensive in random writes; a modifiable object type by extents, without a Merkle tree, is probably needed | Decided: in version 1, simple extent files allocated in large chunks, with no Merkle tree, used by application databases (see [On-disk format](#on-disk-format)). Copy-on-write, a checksum per block and versions as snapshots for that type are deferred until after the alpha |
 | 2 | Several disks, mirroring | One disk for the store in version 1; another disk is one more store where zones can be placed; mirroring later |
 | 3 | Quotas per application | The quota is carried by the capability of the collection |
 | 4 | How long versions are kept | All versions for 30 days, then one per day, then one per week; adjustable |

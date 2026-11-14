@@ -15,7 +15,8 @@ Platform bring-up (UEFI, ACPI, PCI, interrupts, timers, start of the other cores
 ## Boot
 
 - Secure boot and the single signed EFI image are in [security.md](security.md#secure-boot); the boot image and the A/B/R slots are in [storage.md](storage.md#updates).
-- Levers for boot time: a single EFI image; services started at the first use of their capability; Wasm code already compiled in the cache; verification of blobs on read; drivers started in parallel; the shell rendered from its snapshot (see the [recorded conflict](../research/open-questions.md#recorded-conflicts) on snapshots).
+- Levers for boot time: a single EFI image; services started at the first use of their capability; Wasm code already compiled in the cache; verification of blobs on read; drivers started in parallel.
+- The shell starts normally; only an idle Wasm component may be restored from an automatic snapshot (**Decided**, 14 November 2026).
 - Probable long point: loading the firmware of the GPU (to measure; from memory).
 - Devices are reset at boot, not at shutdown.
 - Microcode: a blob of the system, loaded by the kernel at boot (**Proposed**, 14 November 2026).
@@ -29,7 +30,7 @@ Platform bring-up (UEFI, ACPI, PCI, interrupts, timers, start of the other cores
 
 **Decided, 14 November 2026.** A **snapshot** is the frozen state of a process, stored so that the process can resume later. Version 1:
 
-1. An application saves its state itself, through two exports of the `app` world, `suspend` and `resume`, to its `home` collection.
+1. A component saves its state itself, to its `home` collection, through the exports `suspend` and `resume`. They belong to the `service` world, which the `app` world includes (see [wasm-abi.md](wasm-abi.md#corewit)). `resume` is called instead of `start` on a new instance when `suspend` completed before.
 2. An automatic snapshot exists only for an idle Wasm component, after a one-week trial with Wasmtime.
 3. There is no snapshot for native code: a service restarts and reloads its state from storage.
 4. Memory pressure and crash recovery no longer assume snapshots.
@@ -60,7 +61,7 @@ Principle: shutdown and crash follow the same path ("crash-only" software, Cande
 | Panic of one core's kernel | The kernel restarts alone and the machine continues; see [kernel.md](kernel.md#recovery-of-one-cores-kernel) |
 | Hang | A hardware watchdog armed by the kernel; a heartbeat per service, watched by the service manager |
 | Reboot loop | A/B/R slots, automatic rollback (see [storage.md](storage.md#updates)) |
-| Requested shutdown | Same path as a crash. Devices are reset at boot, not at shutdown. The earlier sequence ("last snapshot, root switch, power off") no longer holds as written; see the [recorded conflict](../research/open-questions.md#recorded-conflicts) |
+| Requested shutdown | Decided, 14 November 2026: the system calls `suspend` on the running applications with a bounded delay (starting value 500 ms, to calibrate), calls `sync` on storage, then powers off. A crash skips the first step; that is the only difference between shutdown and crash. Devices are reset at boot, not at shutdown |
 
 **Black box.** A ring buffer of the last seconds of messages per task, always active, attached to the crash report. The report stays local; the agent can explain it. A report leaves the machine only with the user's agreement, report by report (see [project-level questions](../research/open-questions.md#project-level-questions)).
 

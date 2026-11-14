@@ -8,7 +8,7 @@ Terms: **Wasm** is WebAssembly. A **component** is a Wasm binary in the Componen
 
 **Decided.** Wasm only, through the Component Model, WIT and WASI 0.3. WASI 0.2 and 0.1 are accepted through adapters, to widen the range of languages.
 
-`os:core` requires WASI 0.3: Rust first, the other languages when their tools get there (**Decided**, 14 November 2026).
+`os:core` requires WASI 0.3: Rust first, the other languages when their tools get there (**Decided**, 14 November 2026). There is no WASI 0.2 variant of the package.
 
 ## ABI stability
 
@@ -27,31 +27,65 @@ Promise: a published component keeps running. A corpus of old binaries in CI ver
 
 ## core.wit
 
-The contract of the `app` and `agent` worlds is [contracts/core.wit](../contracts/core.wit). The first draft was validated by `wasm-tools 1.263`.
+The contract lives in `contracts/`. It holds three packages, all at version 0.1.0.
 
-**Revision** (**Decided**, 14 November 2026): a complete revision, as the first contract of step 0 of the [build order](../plan/roadmap.md#build-order). It covers:
+| Package | File | Content |
+|---|---|---|
+| `os:core` | [core.wit](../contracts/core.wit) | Shared types (errors, rights, effect class, marks, provenance) and the three worlds |
+| `os:core` | [store.wit](../contracts/store.wit) | Storage (`store`), capabilities kept across launches (`keep`), object exchange (`exchange`) |
+| `os:core` | [ui.wit](../contracts/ui.wit) | Surfaces and the open interface tree |
+| `os:core` | [actions.wit](../contracts/actions.wit) | Actions on the application side, tasks on the agent side, agent stubs |
+| `os:catalog-agent`, `os:catalog-app` | [catalog.wit](../contracts/catalog.wit) | The two catalogue levels, each versioned on its own (see [ui.md](ui.md#catalogue)) |
+
+The first draft, a single file, was validated by `wasm-tools 1.263`.
+
+### Worlds
+
+| World | For | Imports | Exports |
+|---|---|---|---|
+| `service` | A component without interface: service, server, background work. No function assumes a screen, a GPU, a keyboard or an agent | `keep` | `actions`, `start`, `suspend`, `resume` |
+| `app` | A component that draws with the catalogue. Includes `service` | `exchange`, the two catalogue levels | `show` |
+| `agent` | The agent | The agent catalogue level, `inference`, `memory`, `audio` (stubs) | `handle` |
+
+Life cycle:
+
+- `start(home)`: first launch, or launch with no saved state. `home` is the component's own collection.
+- `suspend()`: save state into `home` now. Once it returns, the system may destroy the instance at any time. It is the only path that crosses devices and architectures, so a component saves data, not memory.
+- `resume(home)`: called instead of `start` on a new instance when `suspend` completed before, possibly on another device.
+- `show(surface)`: the shell gives the application a surface. It is called after `start` or `resume`, zero or more times: an application can run with no surface and get one later, or several.
+
+The same component is instantiated in two ways: long-lived (`start` or `resume`, later `suspend`), and once per action, as a fresh instance on which the system calls only `actions.invoke` (see [agent.md](agent.md#effect-class)).
+
+### Actions
+
+Actions are what makes a component drivable by the agent. Every component exports the `actions` interface, which only executes (`invoke`). The declaration of the actions (name, description, input and output schema, effect class) is in the signed package manifest; there is no `list-actions` function. WIT has no free annotations, so the manifest is a separate contract. That contract does not exist yet (**Open**; see [open questions](../research/open-questions.md#open-items-in-the-contract-files)).
+
+### Growth and encoding
+
+- Adding a case to a variant, an enum or flags, or a field to a record, breaks the ABI (from memory in the source's verification list), and the system serves every published version of `os:core`.
+- What is expected to grow is therefore open: `error` is a wide list with a fallback case `other`; node kinds, event kinds, journal states and principals are strings. Adding a kind to a catalogue is a minor version, not a break.
+- A typed value carried as a string (action input and output, node props, event value) is UTF-8 JSON. Resources are never encoded: a field holds the name of a binding carried next to the string.
+- String formats are specified in the files: component identity, object identifier, entry names, the grammar of the filter of `query`.
+- WIT has version annotations (`@since`, `@unstable`, `@deprecated`), but no free annotations.
+
+### Revision
+
+**Decided, 14 November 2026**: a complete revision, as the first contract of step 0 of the [build order](../plan/roadmap.md#build-order). The files at version 0.1.0 carry it:
 
 - `suspend` and `resume` (see [platform.md](platform.md#process-state-suspend-resume-and-snapshots));
 - the effect class in two fields, and actions in the manifest (see [agent.md](agent.md#effect-class));
 - a wide list of errors with a fallback case;
-- `sync`, versions, metadata, rights held, persistence of a received object;
-- object picker, drag and drop, clipboard;
+- `sync`, versions, metadata, rights held, persistence of a received object (`keep`);
+- object picker, drag and drop, clipboard (see [ui.md](ui.md#giving-an-object-to-an-application));
 - provenance on objects and results;
-- `start` without a mandatory surface;
+- `start` without a mandatory surface (the surface comes through `show`);
 - an open encoding for the interface tree;
 - specified string formats.
 
-Known limits and open points (**Open**):
+Still open (**Open**):
 
-- WIT has version annotations (`@since`, `@unstable`, `@deprecated`), but no free annotations.
-- Adding a case to a variant breaks the ABI (from memory in the source's verification list): the system will have to serve every published version of `os:core`.
-- Cancelling one precise action (`undo` designates nothing).
-- Grammar of the filter of `query`.
-- Semantic icon names (see [ui.md](ui.md#icons)).
-- Audio and driver interfaces.
-- Management of surfaces by the agent.
-
-Actions: every application exports its typed actions with their effect class. This is what makes it drivable by the agent.
+- Driver interfaces, and the management of surfaces by the agent, are not in the contract. The audio interface of the agent is a stub.
+- The items marked `OPEN` in the contract files are listed in [open questions](../research/open-questions.md#open-items-in-the-contract-files).
 
 ## Compile service
 

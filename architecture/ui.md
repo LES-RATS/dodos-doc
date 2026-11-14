@@ -20,26 +20,31 @@ This file covers the compositor, the shell, the agent's interface, the design sy
 
 ## Shell
 
-**Aligned; trial to do.**
+**Aligned**; the renderer is **Decided** (14 November 2026).
 
 - There is no desktop environment: a surface manager centred on the agent, which serves as a launcher. A **surface** is a region of the screen owned by one program.
 - The shell and the DodOS catalogue are drawn by gpui (Apache-2.0, published on crates.io, wgpu rendering on Linux since February 2026, AccessKit, Wasm target, headless mode), with the components of gpui-kit. Verified 13 November 2026.
-- Rune as a fallback: a pre-release that refuses every pull request. LibWeb is compared in the same trial.
+- gpui is the shell renderer for version 1 (**Decided**, 14 November 2026).
+- **Trial**, in weeks 1-2 of the [calendar](../plan/roadmap.md#calendar), as a validation of that choice: draw the catalogue with gpui and write the window back end of gpui for the project's compositor. LibWeb is compared in the same trial.
+- Rune (a pre-release that refuses every pull request) is the fallback only if the trial fails.
 - Same theme tokens as the web.
-- **Trial** (**Open**): draw the catalogue with gpui, then with Rune and LibWeb, and write the window back end of gpui for the project's compositor.
 
 ### Giving an object to an application
 
-**Decided, 14 November 2026.** The object picker, drag and drop and the clipboard are held by the shell, and hand over an attenuated capability (a capability with reduced rights).
+**Decided, 14 November 2026.** The object picker, drag and drop and the clipboard are held by the shell, and hand over an attenuated capability (a capability with reduced rights). The user's gesture is the grant: there is no permission dialog.
+
+In the contract ([contracts/store.wit](../contracts/store.wit)), the `exchange` interface gives `pick`, `copy` and `paste`. Drag and drop is part of the interface tree: the kinds `drag-source` and `drop-target` of the application catalogue, and the event "dropped". A capability received this way dies with the instance unless the component stores it through the `keep` interface.
 
 ## Agent interface format
 
 **Aligned.**
 
-- The model emits A2UI 1.0 (Express format) against a DodOS catalogue, translated to the types of [contracts/core.wit](../contracts/core.wit): a flat list of nodes, about fifteen types, no style, no URL, no code.
+- The model emits A2UI 1.0 (Express format) against a DodOS catalogue, translated to the interface tree of `os:core/ui` ([contracts/ui.wit](../contracts/ui.wit)): a flat list of nodes linked by ids, with no style, no URL, no code and no position.
+- The encoding is open: a node names its kind by a string and carries its fields (`props`) as JSON. The kinds and their fields are WIT types in the two catalogue packages (see [Catalogue](#catalogue)). A new kind is a new minor version of a catalogue; a component built against an old catalogue keeps working.
+- The agent draws on the `overlay` surface it receives with a request; that surface accepts only the fifteen agent-level kinds.
 - Buttons are bound to the typed actions of the task.
-- A JS applet without capabilities covers the rest, including 3D.
-- The interface tree is validated by the system at each update: existing parent, action present in the scope of the task, size ceilings.
+- A JS applet without capabilities (the `applet` kind) covers the rest, including 3D.
+- The interface tree is validated by the system at each update: kind known and allowed on the surface, props matching the kind, existing parent, actions within the scope of the task, size caps. A rejected update changes nothing.
 - A2UI has no official Rust SDK (TypeScript, Python, Dart, Swift, Kotlin). The project writes its own Rust compiler from the specification and its conformance suites (**Decided**, 14 November 2026).
 - The DodOS catalogue in A2UI format remains to be produced; WIT is the source and the A2UI catalogue is generated from it (see [Catalogue](#catalogue)).
 
@@ -80,8 +85,10 @@ This file covers the compositor, the shell, the agent's interface, the design sy
 
 **Decided, 14 November 2026**: two levels, in two WIT interfaces versioned separately, as proposed below.
 
-- Agent level: the fifteen current types.
-- Application level: about fifteen more (virtual list fed by a stream, tree, tabs and side navigation, menu, dialog, text editor, slider, search, drawing area).
+- The two levels are the packages `os:catalog-agent` and `os:catalog-app`, both at 0.1.0, in [contracts/catalog.wit](../contracts/catalog.wit). They hold types only: a case name of `kind` is the kind string of a node, and its payload record is the node's props.
+- Agent level, fifteen kinds: `stack`, `card`, `items`, `text`, `image`, `icon`, `table`, `progress`, `divider`, `button`, `field`, `choice`, `toggle`, `preview`, `applet`.
+- Application level, fifteen more: `virtual-list` and `row` (a long list fed on demand), `tree` and `tree-item`, `tabs`, `navigation` (side navigation) and `page`, `menu`, `dialog`, `text-editor`, `slider`, `search`, `canvas` (drawing area), `drag-source`, `drop-target`.
+- An application surface accepts both levels; the agent's overlay accepts only the agent level.
 - Entry criteria for a type: semantic and not visual; accessible by construction; identical rendering in the rendering engines; adaptive layout with no absolute position.
 - WIT is the source; the A2UI catalogue is generated from it.
 - Everything else goes through an escape hatch: applet, WebGPU surface or web view.
@@ -90,7 +97,7 @@ This file covers the compositor, the shell, the agent's interface, the design sy
 
 ### Icons
 
-**Decided.** Material Symbols in the Rounded variant (Apache-2.0, a variable font with four axes: fill, weight, grade, optical size), as a subset. `core.wit` exposes the project's own semantic names, frozen, associated with the glyphs: the set stays replaceable without breaking the ABI.
+**Decided.** Material Symbols in the Rounded variant (Apache-2.0, a variable font with four axes: fill, weight, grade, optical size), as a subset. The contract exposes the project's own semantic names, frozen, associated with the glyphs: the set stays replaceable without breaking the ABI. They are the enum `icon-name` of `os:catalog-agent` ([contracts/catalog.wit](../contracts/catalog.wit)); its list is a starting set to review.
 
 ### To watch
 

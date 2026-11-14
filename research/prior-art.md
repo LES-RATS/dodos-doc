@@ -51,12 +51,12 @@ These precedents concern the variants described in [kernel.md](../architecture/k
 **Proposed.**
 
 1. Provenance carried by IPC and enforced by the kernel, to bound what an agent can do with untrusted content.
-2. A multikernel with replicated process state, verified.
+2. A multikernel by messages with no shared state, with distributed capability revocation and per-core kernel recovery, backed by formal models. The replicated log remains only a measured comparison point (reworded and **Decided**, 14 November 2026).
 3. A kernel written from a model by agents, with a differential oracle and bounded proofs.
 4. The task as a kernel object: a single object gathers the delegated rights, the time budget, the provenance label and the log of an agent task, revocable in one operation.
 5. No executable page outside the compile service, enforced by the kernel.
 
-The recovery of one core's kernel is a candidate for a further axis to claim (see [kernel.md](../architecture/kernel.md#recovery-of-one-cores-kernel)).
+The recovery of one core's kernel, now part of axis 2, was first recorded as a candidate for a further axis to claim (see [kernel.md](../architecture/kernel.md#recovery-of-one-cores-kernel)).
 
 Honest finding: today the mechanisms of the kernel are all borrowed (model of seL4, structure of Barrelfish). The novelty is in the method, in the combination and in these axes, none of which is designed yet.
 

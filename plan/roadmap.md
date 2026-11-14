@@ -50,7 +50,7 @@ Dependencies of Ladybird, compositor on real scanout, latency gates, then sleep,
 
 | Weeks | Hosted track | Kernel track | Milestone |
 |---|---|---|---|
-| 1-2 | Step 0, security model, runtime, `dodo` | Trials: Zig and Rust boundary, kernel with no per-thread stack, oracle harness, NVIDIA core outside Linux; boot under QEMU | Base ready |
+| 1-2 | Step 0, security model, runtime, `dodo`; shell trial that validates gpui (see [ui.md](../architecture/ui.md#shell)) | Trials: Zig and Rust boundary, kernel with no per-thread stack, oracle harness, NVIDIA core outside Linux; boot under QEMU | Base ready |
 | 3-7 | Surface, actions, agent, confirmations, injection attacks | Contracts and one-core model; capabilities, IPC, basic memory | First public demonstration; IPC measured |
 | 8-17 | Shell, real store, signed packages, hosted network stack | Multi-core, distributed revocation, recovery of a kernel, scheduling, mlibc, Rust std, virtio | A `wasi:http` component served under QEMU; one kernel killed, the machine continues |
 | 18-26 | Services ported to the target | Real desktop: ACPI, PCI, IOMMU, NVMe, keyboard, network card | Server image on the desktop |
@@ -85,6 +85,7 @@ What does not compress with more agents: tuning on real hardware, calibration of
 - Wi-Fi (with the laptops) and Bluetooth ([network.md](../architecture/network.md#wi-fi)).
 - Camera class driver ([drivers.md](../architecture/drivers.md#native-drivers)).
 - 1 GB pages ([memory.md](../architecture/memory.md#page-sizes)).
+- Copy-on-write extents, per-block checksums and snapshot-based versions for the mutable extent type ([storage.md](../architecture/storage.md#on-disk-format)).
 - Container registry as a distribution transport ([storage.md](../architecture/storage.md#packages-and-distribution)).
 
 Version 1 has two rendering engines ([ui.md](../architecture/ui.md#tokens)).

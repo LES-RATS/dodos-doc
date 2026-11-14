@@ -4,7 +4,7 @@ One row per firm decision. Statuses are defined in the [README](../README.md#sta
 
 - **Id**: assigned in the order of the archived document when the documentation was restructured on 14 November 2026.
 - **Date**: given when the source states one. An empty date means the decision predates 14 November 2026 and the source gives no date.
-- **Basis**: `table` = marked Decided in the decisions table of the archived document; `explicit` = marked "decided" in its text; `review` = settled in its section "Decisions after the review (14 November 2026)", which states that it settles each point but does not mark each line individually.
+- **Basis**: `table` = marked Decided in the decisions table of the archived document; `explicit` = marked "decided" in its text; `review` = settled in its section "Decisions after the review (14 November 2026)", which states that it settles each point but does not mark each line individually; `resolution` = resolution of a conflict recorded during the restructuring, given on 14 November 2026.
 
 | Id | Date | Decision | Basis | Detailed in |
 |---|---|---|---|---|
@@ -87,3 +87,10 @@ One row per firm decision. Statuses are defined in the [README](../README.md#sta
 | D-077 | 14 November 2026 | Electron applications: not planned | review | [wasm-abi.md](../architecture/wasm-abi.md#electron-applications) |
 | D-078 | 14 November 2026 | Documentation: the direction document is archived; documentation is a set of English files per domain, with a decision log | explicit | [thesis.md](../thesis.md#principles) |
 | D-079 | 14 November 2026 | Shell candidate Nushell withdrawn until a native port is verified | review | [wasm-abi.md](../architecture/wasm-abi.md#terminal-and-shell) |
+| D-080 | 14 November 2026 | Boot: the lever "shell rendered from its snapshot" is dropped; the shell starts normally, and only an idle Wasm component may be restored from an automatic snapshot | resolution | [platform.md](../architecture/platform.md#boot) |
+| D-081 | 14 November 2026 | Shutdown: `suspend` on running applications with a bounded delay (starting value 500 ms, to calibrate), `sync` on storage, power off; a crash skips the first step, the only difference | resolution | [platform.md](../architecture/platform.md#crash-and-shutdown) |
+| D-082 | 14 November 2026 | Storage: one mutable type for heavily rewritten data in version 1, simple extent files in large chunks; copy-on-write extents, per-block checksums and snapshot-based versions deferred until after the alpha | resolution | [storage.md](../architecture/storage.md#on-disk-format) |
+| D-083 | 14 November 2026 | Shell renderer: gpui for version 1; the trial in weeks 1-2 validates the choice; Rune only if the trial fails | resolution | [ui.md](../architecture/ui.md#shell) |
+| D-084 | 14 November 2026 | Function lane: humans write or validate tests and merge only in the contract lane; in the function lane, review by agents of a different model family with repository read access, a human sample, automatic merge once checks and review pass (refines D-032) | resolution | [verification.md](../plan/verification.md#development-workflow) |
+| D-085 | 14 November 2026 | Decision records live in the common documentation repository (`decisions/`), not in each repository | resolution | [verification.md](../plan/verification.md#development-workflow) |
+| D-086 | 14 November 2026 | Research axis 2 reworded: a multikernel by messages with no shared state, distributed capability revocation and per-core kernel recovery, backed by formal models; the replicated log is only a measured comparison point | resolution | [prior-art.md](../research/prior-art.md#kernel-research-axes) |

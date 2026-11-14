@@ -19,6 +19,14 @@ The agent is the AI assistant built into the system. It acts for the user throug
 - No agent task combines private data, untrusted content and external communication. This rule targets the agent's tasks (**Decided**, 14 November 2026); it takes up the "lethal trifecta" (Willison) and the "rule of two" (Meta), which are to be cited.
 - Reading the accessibility tree of another application is a capability; it also serves the agent as a fallback for web sites, which export no actions (see [ui.md](ui.md#accessibility)).
 
+## The agent in the contract
+
+The `agent` world ([contracts/core.wit](../contracts/core.wit)) exports one function, `handle`, called once per user request with the user's words, a `task` and an `overlay` surface.
+
+- The **task** is the unit of delegation ([contracts/actions.wit](../contracts/actions.wit)). It carries the delegated rights, the marks and the journal, and is revocable as a whole. Everything the agent can do comes from it, and nothing survives it.
+- Through the task the agent reads its marks, lists the actions of its scope (`available`), invokes one (`invoke`), undoes one journal entry (`undo`), reads the journal, and creates a sub-task with a subset of the scope.
+- The world imports `inference`, `memory` and `audio`. These three interfaces are stubs in the contract: nothing is fixed yet.
+
 ## Security model
 
 **Decided, 14 November 2026.** The points below are to be written in the page of the security model, before `core.wit` is frozen.
@@ -27,20 +35,23 @@ The agent is the AI assistant built into the system. It acts for the user throug
 
 The **effect class** of an action says what the action can change. It has two fields:
 
-| Field | Values |
-|---|---|
-| Modification | none, reversible, irreversible |
-| Scope | local, external |
+| Field | Name in the contract | Values |
+|---|---|---|
+| Modification | `change` | `none`, `reversible`, `irreversible` |
+| Scope | `reach` | `local`, `external` |
 
-- The actions and their classes are in the signed manifest; they are not returned by a function.
-- Each action runs in a fresh instance, which receives only the capabilities of its class. With this, the class declared by an application fixes the capabilities handed over for the call, so lying about the class gains nothing. The mapping described earlier, in the terms of the former single-field class, was: a read action receives only read capabilities and no network; a reversible action receives only versioned storage; only an external action receives the network.
+- The actions and their classes are in the signed package manifest: for each action, its name, description, input schema, output schema and effect class. There is no `list-actions` function: a function could change its answer after installation, and the component would have to run to be asked. The system reads the manifest and serves it to the agent as `action-info`.
+- Each action runs in a fresh instance, on which the system calls only `actions.invoke`. The instance shares no memory with the running application and is destroyed afterwards. It holds only what the request carries (input, bound objects, the `home` collection), attenuated to the class.
+- The imports of an action instance are linked to match its class: storage is read-only when `change` is `none`, and every network import answers `denied` when `reach` is `local`. The declared class is therefore binding, and lying about it gains nothing. Every write to the store is versioned, which is why a store capability is safe to hand to an action whose change is `reversible`.
+- The contract is in [contracts/actions.wit](../contracts/actions.wit) and [contracts/core.wit](../contracts/core.wit).
 
 ### Provenance marks
 
 Provenance follows the data. A task carries two marks: "has read private data" and "has read untrusted content".
 
+- In the contract the marks are the flags `private` and `untrusted`, and a provenance is an origin (`system`, `user`, `app:<component>`, `web:<origin>`) plus marks. Provenance is set by the system only, never by the producer. Marks are only ever added; reading data adds its marks to the reading task.
 - The output of an action is untrusted by default for any third-party application. Only the system and the user's own data are trusted; a publisher does not declare itself trusted.
-- A secret field never emits its value to the agent; the value goes to the action directly.
+- A secret field never emits its value to the agent; the value goes to the action directly, read by the system when the button is activated.
 
 ### Confirmation matrix
 
@@ -52,7 +63,7 @@ Provenance follows the data. A task carries two marks: "has read private data" a
 | External read | Automatic | Automatic without the "private" mark, confirmation otherwise |
 | External modification | Confirmation | Confirmation, provenance and exact content displayed |
 
-- The confirmation screen is drawn by the system from the typed schema of the action, never from the text of the model. It is drawn above the surface concerned (see [ui.md](ui.md#agent-surface)).
+- The confirmation screen is drawn by the system from the typed schema of the action and the exact input, never from the text of the model. The agent cannot draw, skip or answer it; a refusal by the user is the error `refused`. It is drawn above the surface concerned (see [ui.md](ui.md#agent-surface)).
 - A suite of injection attacks becomes a gate of the hosted track (see [roadmap](../plan/roadmap.md#calendar)).
 - Labels per value rather than per task (FIDES, RTBAS, IsolateGPT): to read, after version 1.
 

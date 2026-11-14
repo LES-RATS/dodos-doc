@@ -13,7 +13,7 @@ The method is drawn from experience reports of 2026: the rewrite of the Copilot 
 - A short `AGENTS.md`, 60 to 100 lines, written by hand: the verification command at the top, three zones (always, ask first, never), pointers to `docs/`. An automatically generated file degrades results (ETH Zurich study, arXiv 2602.11988).
 - A `CLAUDE.md` of a few lines that points to `AGENTS.md`.
 - Skills in `.agents/skills/`, with a link `.claude/skills` to that folder: conventions of the repository's language, QEMU debugging, rebase and review, triage of an oracle failure.
-- A versioned `docs/`: architecture, decisions, conventions. `AGENTS.md` is the map, not the content.
+- A versioned `docs/`: architecture, conventions. `AGENTS.md` is the map, not the content. Decision records are not kept per repository (see [Development workflow](#development-workflow)).
 - Hard rules never live in prose: they are enforced by CI, linters, `CODEOWNERS` and hooks.
 
 ### CI is authoritative
@@ -90,22 +90,22 @@ Flux (refinement types for Rust) as a proof tool is **Aligned** (retained, to be
 
   | Lane | Touches | Process | Review and merge |
   |---|---|---|---|
-  | Contract | Kernel, `os:core`, package format, security model (also: WIT, ABI, kernel interfaces, gates) | A decision record re-read by the two humans, then the executable model and the tests, then the code | Agreement of the two humans. Humans re-read the contracts and the tests of this lane (Decided, 14 November 2026) |
-  | Function | Features | Brief, tests, agent, review, merge (the task cycle below) | Reviewed by agents of another family, with read access to the repository, and a sample by a human (Decided, 14 November 2026). The earlier proposals name one human for the merge; see the [recorded conflict](../research/open-questions.md#recorded-conflicts) |
+  | Contract | Kernel, `os:core`, package format, security model (also: WIT, ABI, kernel interfaces, gates) | A decision record re-read by the two humans, then the executable model and the tests, then the code | Agreement of the two humans. Humans write or validate the tests and merge only in this lane (Decided, 14 November 2026) |
+  | Function | Features | Brief, tests, agent, review, merge (the task cycle below) | Tests and code are reviewed by agents of a different model family, with read access to the repository; a human reviews a sample; the merge is automatic once the checks and that review pass (Decided, 14 November 2026) |
   | Maintenance | Dependencies, documentation | Direct PR | Merges alone when the checks pass (Decided, 14 November 2026) |
 
-- Decision records: see the [recorded conflict](../research/open-questions.md#recorded-conflicts) on where they live. The documentation keeps a [decision log](../decisions/README.md) (**Decided**, 14 November 2026).
+- Decision records live in the common documentation repository, in [decisions/](../decisions/README.md), not in each repository, because decisions cross repositories (**Decided**, 14 November 2026).
 - Between repositories: a contract change is a PR in the repository of the contract, then a move of the pin in the integration repository, which re-runs the tests of the dependants.
 - Definition of "done": `verify` green, gates held, documentation up to date, no ratchet budget loosened.
 - Rhythm: a nightly image, a weekly image tested on hardware, a version when the gates are held.
 
 ### Task cycle
 
-1. A human writes the brief (goal, repository, authorised files, forbidden zones, expected final state) and writes or validates the tests before the code. For the kernel and the ABI, part of the tests stays invisible to the agent.
+1. A human writes the brief (goal, repository, authorised files, forbidden zones, expected final state). Tests come before the code. In the contract lane a human writes or validates them; in the function lane they are reviewed with the code, in step 4. For the kernel and the ABI, part of the tests stays invisible to the agent.
 2. The agent works in a worktree, with no secret, until `verify` passes. Beyond a fixed number of turns or three identical failures, it stops and escalates.
 3. Anti-cheat gate: the new test must fail without the fix. No stub, no `todo!()`, no workaround justified by a paragraph.
 4. Review by agents with a blank context, of another family of models: two reviewers for the kernel and for the ABI, one for userland. They receive the diff, the brief and the contracts, and read access to the repository (**Decided**, 14 November 2026).
-5. Merge queue, then merge by a human.
+5. Merge queue. In the contract lane a human merges. In the function lane the merge is automatic once the checks and the review pass (**Decided**, 14 November 2026).
 
 ### Documented pitfalls to avoid
 

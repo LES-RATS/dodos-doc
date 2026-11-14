@@ -84,7 +84,7 @@ Further rules:
 
 - A complete stop happens only if containment itself is violated or if the failure repeats. A trace is written to a reserved area (see [storage.md](storage.md#partitions)), then the machine restarts.
 - Check: the deterministic simulation kills a kernel at random at every merge and verifies that the rest survives. A gate is to be set: the recovery time of a core (see [gates](../plan/gates.md#overhead-gates)).
-- Prior art (web search of 14 November 2026, abstracts only): Barrelfish/DC replaces the kernel of a core at run time, with no failure evaluation found; Quest-V recovers after a failure but isolates its kernels by virtualisation; Kmorph (Linux, out of tree) keeps a spare kernel that takes over the machine in about one second. Hive (SOSP 1995) is to be cited. Recovery is a candidate for a fourth research axis to claim, with a strong argument on the server side; to be verified.
+- Prior art (web search of 14 November 2026, abstracts only): Barrelfish/DC replaces the kernel of a core at run time, with no failure evaluation found; Quest-V recovers after a failure but isolates its kernels by virtualisation; Kmorph (Linux, out of tree) keeps a spare kernel that takes over the machine in about one second. Hive (SOSP 1995) is to be cited. Recovery was recorded as a candidate research axis to claim, with a strong argument on the server side, to be verified; it is now part of [research axis 2](../research/prior-art.md#kernel-research-axes) (**Decided**, 14 November 2026).
 
 ### Core-by-core replacement
 
