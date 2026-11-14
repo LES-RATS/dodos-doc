@@ -31,7 +31,7 @@ Three reasons to exist:
 |---|---|---|
 | Games | Wasm and cloud only | Decided |
 | Native applications | Set aside for now: Wasm and WIT remain the only application ABI. See [architecture/wasm-abi.md](architecture/wasm-abi.md#native-applications) | Aligned |
-| Virtual machines | Out of scope as a way to run anything on the OS. Linux drivers in micro-VMs are a known alternative that was not retained (see [architecture/drivers.md](architecture/drivers.md#drivers-in-micro-vms-fallback)) | Decided |
+| Virtual machines | Out of scope as a way to run anything on the OS. Linux drivers in micro-VMs are plan B, opened only if the emulation layer stalls on a driver (see [architecture/drivers.md](architecture/drivers.md#drivers-in-micro-vms-fallback)) | Decided |
 
 ## Out of scope
 
