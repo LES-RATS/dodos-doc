@@ -1,0 +1,89 @@
+# Decision log
+
+One row per firm decision. Statuses are defined in the [README](../README.md#status-legend); only **Decided** statements appear here.
+
+- **Id**: assigned in the order of the archived document when the documentation was restructured on 14 November 2026.
+- **Date**: given when the source states one. An empty date means the decision predates 14 November 2026 and the source gives no date.
+- **Basis**: `table` = marked Decided in the decisions table of the archived document; `explicit` = marked "decided" in its text; `review` = settled in its section "Decisions after the review (14 November 2026)", which states that it settles each point but does not mark each line individually.
+
+| Id | Date | Decision | Basis | Detailed in |
+|---|---|---|---|---|
+| D-001 | | Application ABI: Wasm only, through the Component Model, WIT and WASI 0.3; WASI 0.2 and 0.1 through adapters | table | [wasm-abi.md](../architecture/wasm-abi.md#application-abi) |
+| D-002 | | Kernel: capability microkernel, 64-bit only, written from the model and not translated from seL4 | table | [kernel.md](../architecture/kernel.md#base-decisions) |
+| D-003 | | No lasting dependency on the seL4 ABI; seL4 is only a black-box oracle for differential tests | table | [kernel.md](../architecture/kernel.md#base-decisions) |
+| D-004 | | Languages: kernel in Zig and Rust, system userland in Rust, Odin rejected | table | [kernel.md](../architecture/kernel.md#base-decisions) |
+| D-005 | | ABI stability: versioned, stable WIT worlds; system calls behind a kernel-supplied code page, never called directly | table | [wasm-abi.md](../architecture/wasm-abi.md#abi-stability) |
+| D-006 | | Web engine: perpetual fork of Ladybird (LibWeb, LibJS), following published versions | table | [web.md](../architecture/web.md#web-engine) |
+| D-007 | | Compositor: a small system compositor in Rust written by the project; zero-copy buffers, direct scanout and frame callback with deadline from the first version | table | [ui.md](../architecture/ui.md#compositor) |
+| D-008 | | Drivers: Linux long-term-support drivers from kernel.org, compiled against a library that reimplements the kernel's internal API, one process per driver; no VM, no Linux kernel, no system call translation | table | [drivers.md](../architecture/drivers.md#linux-driver-emulation-layer) |
+| D-009 | | GPU: OS-independent core of NVIDIA's open modules with the project's own glue; Vulkan by NVK from the Haiku port's Mesa fork; compute by Vulkan (mechanism verified 13 November 2026) | table | [gpu.md](../architecture/gpu.md#nvidia-port) |
+| D-010 | | Virtual machines are out of scope as a way to run anything on the OS | table | [thesis.md](../thesis.md#scope) |
+| D-011 | | Permissions are centralised: one right = one capability = one revocable line | table | [security.md](../architecture/security.md#permissions) |
+| D-012 | | Distribution: a package is a set of blobs and a signed manifest; identity = publisher key + name; launch without installing; central store later, never mandatory (transport was left open; see D-067) | table | [storage.md](../architecture/storage.md#packages-and-distribution) |
+| D-013 | | Games: Wasm and cloud only | table | [thesis.md](../thesis.md#scope) |
+| D-014 | | Licence: dual AGPLv3 and commercial; permissive SDK and linked libraries; Linux drivers under GPLv2 in separate processes | table | [thesis.md](../thesis.md#licence) |
+| D-015 | 14 November 2026 | Portable and built to last: nothing assumes x86-64 outside the architecture layer | explicit | [thesis.md](../thesis.md#principles) |
+| D-016 | 14 November 2026 | English for development | explicit | [thesis.md](../thesis.md#principles) |
+| D-017 | | IPC gate: round trip between two processes on the same core below 1.2 times seL4 | explicit | [gates.md](../plan/gates.md#overhead-gates) |
+| D-018 | | Reference hardware: the Intel + NVIDIA desktop first | explicit | [platform.md](../architecture/platform.md#hardware-reference) |
+| D-019 | | Bluetooth host stack: Sapphire of Fuchsia as the first lead | explicit | [network.md](../architecture/network.md#bluetooth) |
+| D-020 | | Frosted glass is reserved for the system at first | explicit | [ui.md](../architecture/ui.md#design-system) |
+| D-021 | | Icons: Material Symbols Rounded, as a subset, behind the project's own frozen semantic names | explicit | [ui.md](../architecture/ui.md#icons) |
+| D-022 | | The distinction between core types is treated as lasting | explicit | [kernel.md](../architecture/kernel.md#hardware-features) |
+| D-023 | | Agents read the code of all open kernels; no file-by-file translation, no copy, origins cited | explicit | [verification.md](../plan/verification.md#reading-the-code-of-other-kernels) |
+| D-024 | 14 November 2026 | Machines: two only, the reference desktop and the Dell laptop; the laptop is the control machine; no reverse engineering for the Mac M5 | review | [platform.md](../architecture/platform.md#hardware-reference) |
+| D-025 | 14 November 2026 | Process state in version 1: `suspend` and `resume` exports; automatic snapshot only for an idle Wasm component; none for native code; pressure and recovery do not assume snapshots; periodic snapshot deferred | review | [platform.md](../architecture/platform.md#process-state-suspend-resume-and-snapshots) |
+| D-026 | 14 November 2026 | Multi-core structure: one kernel per core, no shared state, messages only; recovery of one core's kernel is in version 1 (decision of the user) | review | [kernel.md](../architecture/kernel.md#multi-core-structure) |
+| D-027 | 14 November 2026 | Revocation is a distributed two-phase protocol with a formal model; memory ownership invariant; recovery order; versioned inter-kernel protocol; three models checked by state exploration | review | [kernel.md](../architecture/kernel.md#multi-core-structure) |
+| D-028 | 14 November 2026 | A service chooses one thread or one thread per core; one kernel per physical core in version 1, second hardware thread idle | review | [kernel.md](../architecture/kernel.md#multi-core-structure) |
+| D-029 | 14 November 2026 | Kernel verification: executable model as the contract-lane artefact; differential test against the model at every PR; seL4 as second oracle with a protected list of differences; fast-path equivalence test; Verus properties in the contract; attack tests; mutation ratchet | review | [verification.md](../plan/verification.md#kernel-verification) |
+| D-030 | 14 November 2026 | The kernel, its model, the oracle harness and `os:core` live in a single repository | review | [verification.md](../plan/verification.md#kernel-verification) |
+| D-031 | 14 November 2026 | The desktop is not a runner; the laptop drives it; self-hosted runner on a private repository only; instructions counted under QEMU; KVM on free runners not the only gate | review | [verification.md](../plan/verification.md#ci-is-authoritative) |
+| D-032 | 14 November 2026 | Human capacity: humans re-read contracts and tests of the contract lane; the function lane is reviewed by agents of another family plus a human sample; the maintenance lane merges alone | review | [verification.md](../plan/verification.md#development-workflow) |
+| D-033 | 14 November 2026 | Gate cadence: fast gates at every merge, hardware gates at night, a merge that breaks a night gate is reverted | review | [gates.md](../plan/gates.md) |
+| D-034 | 14 November 2026 | Software rendering and a virtio-gpu driver, for testing under QEMU and as a fallback path | review | [gpu.md](../architecture/gpu.md#fallback-and-test-paths) |
+| D-035 | 14 November 2026 | Agent security: fresh instance per action; effect class in two fields; actions in the signed manifest; two task marks and the confirmation matrix; third-party output untrusted by default; secret fields; system-drawn confirmation; injection-attack gate | review | [agent.md](../architecture/agent.md#security-model) |
+| D-036 | 14 November 2026 | The rule "no component combines private data, untrusted content and external communication" targets agent tasks | review | [agent.md](../architecture/agent.md#how-the-agent-acts) |
+| D-037 | 14 November 2026 | Revised kernel track in four steps; the server image is a decided milestone | review | [roadmap.md](../plan/roadmap.md#kernel-track) |
+| D-038 | 14 November 2026 | Calendar in weeks from 16 November 2026; alpha at the end of 2027; beta in 2028 (hypothesis to recompute after week 2) | review | [roadmap.md](../plan/roadmap.md#calendar) |
+| D-039 | 14 November 2026 | Scheduling: an asynchronous call carries a slice of the client's budget; budget-follows-call is the default; audio, drivers and storage background work have their own context; emulated Linux drivers are not cancellable | review | [scheduling.md](../architecture/scheduling.md#the-budget-follows-the-call) |
+| D-040 | 14 November 2026 | Scheduling: budgets counted in time; frame-class cores in performance preference; the screen is not the kernel's clock; the kernel moves a thread only within the authorised core set; cancellable requests only for the project's native services | review | [scheduling.md](../architecture/scheduling.md) |
+| D-041 | 14 November 2026 | Gates added or re-referenced: asynchronous WIT call end to end; IPC reference is seL4 MCS with the same Spectre protections, measured on the project's machine | review | [gates.md](../plan/gates.md#overhead-gates) |
+| D-042 | 14 November 2026 | Every system call has a bounded, verified duration, with resumption points | review | [kernel.md](../architecture/kernel.md#base-decisions) |
+| D-043 | 14 November 2026 | Memory: the memory service holds memory capabilities and supplies pages and tables at fault time; accounting at reservation; an allocation error can stop native code; boot-image services pinned, with three services added to the list | review | [memory.md](../architecture/memory.md) |
+| D-044 | 14 November 2026 | Memory page sizes: 2 MB only above a threshold; guard pages for 32-bit memories only | review | [memory.md](../architecture/memory.md#page-sizes) |
+| D-045 | 14 November 2026 | Storage: one SQLite database per key domain; imposed order with power-cut injection tests; no deduplication across encrypted zones; application databases on simple extent files; one throughput gate per workload; store format readable by the previous version; space reserve, TRIM, database copies and checksums; `sync` in the ABI | review | [storage.md](../architecture/storage.md#on-disk-format) |
+| D-046 | 14 November 2026 | A/B switch through UEFI boot variables, not by a rename on FAT | review | [storage.md](../architecture/storage.md#updates) |
+| D-047 | 14 November 2026 | Linux emulation library published under MIT; the whole driver process under GPLv2; IPC to the rest (to be confirmed by legal counsel) | review | [drivers.md](../architecture/drivers.md#licence) |
+| D-048 | 14 November 2026 | USB: a bus interface; controller in one process, class drivers (native first) in others | review | [drivers.md](../architecture/drivers.md#driver-framework) |
+| D-049 | 14 November 2026 | Linux version: the latest long-term-support version when the emulation layer starts; read SUD, LKL and Genode before writing the layer | review | [drivers.md](../architecture/drivers.md#linux-version) |
+| D-050 | 14 November 2026 | GPU: two-week trial at the head of the track; direct scanout decided subject to it; fallback software compositor on the firmware framebuffer | review | [gpu.md](../architecture/gpu.md#trial-at-the-head-of-the-track) |
+| D-051 | 14 November 2026 | `core.wit`: complete revision as the first contract of step 0; `os:core` requires WASI 0.3, Rust first | review | [wasm-abi.md](../architecture/wasm-abi.md#corewit) |
+| D-052 | 14 November 2026 | Giving an object to an application: picker, drag and drop and clipboard held by the shell, handing over an attenuated capability | review | [ui.md](../architecture/ui.md#giving-an-object-to-an-application) |
+| D-053 | 14 November 2026 | Background execution: a capability declared in the manifest; background class with budget; wake-up by a notification service; audio playback keeps its class | review | [scheduling.md](../architecture/scheduling.md#background-execution) |
+| D-054 | 14 November 2026 | Platform service: a trusted process carrying uACPI, PCI enumeration and interrupt routing | review | [platform.md](../architecture/platform.md#platform-service) |
+| D-055 | 14 November 2026 | TLS in the network service; trust roots shipped as a system blob | review | [network.md](../architecture/network.md#the-network-service-replaces-a-firewall) |
+| D-056 | 14 November 2026 | Publishers: a root key delegates signing keys; revocation distributed with TUF metadata; a new right at update requires the user's agreement | review | [security.md](../architecture/security.md#publisher-keys) |
+| D-057 | 14 November 2026 | Entropy: kernel generator fed by the processor, interrupts and the TPM | review | [kernel.md](../architecture/kernel.md#entropy) |
+| D-058 | 14 November 2026 | Observability: system log, profiler per capability, kernel debugger through the USB debug port | review | [platform.md](../architecture/platform.md#observability) |
+| D-059 | 14 November 2026 | Scheduling classes apply to disk and network queues; budgets later | review | [scheduling.md](../architecture/scheduling.md#classes) |
+| D-060 | 14 November 2026 | Display: several screens, scaling per screen, hot-plugging, in the compositor's contract | review | [ui.md](../architecture/ui.md#compositor) |
+| D-061 | 14 November 2026 | Applications of the alpha: browser, terminal, object explorer, settings, text editor, agent | review | [roadmap.md](../plan/roadmap.md#applications-of-the-alpha) |
+| D-062 | 14 November 2026 | Camera: native class driver, after the alpha | review | [drivers.md](../architecture/drivers.md#native-drivers) |
+| D-063 | 14 November 2026 | System calls only from the kernel-supplied page, checked on entry | review | [kernel.md](../architecture/kernel.md#base-decisions) |
+| D-064 | 14 November 2026 | Wasm: gates calibrated before the ratchet is armed; a component does not map a blob into its memory | review | [gates.md](../plan/gates.md), [memory.md](../architecture/memory.md#paging-in-user-space) |
+| D-065 | 14 November 2026 | Scope: deferred after the alpha (periodic snapshot, optimised Wasm tier and 1.2 gate, device communication and companion application, on-demand frequency and cores, image upscaling, FRED); two rendering engines in version 1 | review | [roadmap.md](../plan/roadmap.md#deferred-after-the-alpha) |
+| D-066 | 14 November 2026 | Device communication: distributed-capability model (CapTP, Cap'n Proto); agent memory as an append-only log merged by union; an object modified on both sides keeps both versions | review | [devices.md](../architecture/devices.md) |
+| D-067 | 14 November 2026 | Package distribution in version 1: blobs served by hash from static HTTPS hosting, with a signed manifest; container registry after the alpha | review | [storage.md](../architecture/storage.md#packages-and-distribution) |
+| D-068 | 14 November 2026 | Prior art: add and cite Singularity, Midori, Hive, Escort, Redline, SUD, LKL, FIDES; two novelty claims softened; the Barrelfish/DC figure withdrawn until the paper is read | review | [prior-art.md](../research/prior-art.md#novelty-claims-and-verdicts) |
+| D-069 | 14 November 2026 | Design tokens: two layers (primitives, semantic roles), Design Tokens 2025.10 format, one source file, themes by the resolution module | explicit | [ui.md](../architecture/ui.md#tokens) |
+| D-070 | 14 November 2026 | Catalogue: two levels in two separately versioned WIT interfaces; two rendering engines in version 1 (gpui in the shell, CSS in LibWeb) | explicit | [ui.md](../architecture/ui.md#catalogue) |
+| D-071 | 14 November 2026 | Agent surface: a glass surface of the shell, input bar at the bottom centre, right side panel, detachable cards, system-drawn confirmations, bottom sheet on a narrow screen | explicit | [ui.md](../architecture/ui.md#agent-surface) |
+| D-072 | 14 November 2026 | Wi-Fi: Linux stack (mac80211 and iwlwifi) through the emulation layer, with the laptops, after the alpha; Bluetooth after the alpha | explicit | [network.md](../architecture/network.md#wi-fi) |
+| D-073 | 14 November 2026 | Memory accounting: shared anonymous object charged to its creator; task budget drawn on by all its processes; NUMA out of scope while no target has it; 1 GB pages after the alpha | review | [memory.md](../architecture/memory.md#budget-without-overcommit) |
+| D-074 | 14 November 2026 | Lost device: any device of the circle withdraws its key; capabilities revoked at the next contact; its disk stays encrypted | review | [devices.md](../architecture/devices.md#identity) |
+| D-075 | 14 November 2026 | A2UI: the project writes its own Rust compiler from the specification and its conformance suites | review | [ui.md](../architecture/ui.md#agent-interface-format) |
+| D-076 | 14 November 2026 | Publications: position paper after the first public demonstration | review | [roadmap.md](../plan/roadmap.md#publications) |
+| D-077 | 14 November 2026 | Electron applications: not planned | review | [wasm-abi.md](../architecture/wasm-abi.md#electron-applications) |
+| D-078 | 14 November 2026 | Documentation: the direction document is archived; documentation is a set of English files per domain, with a decision log | explicit | [thesis.md](../thesis.md#principles) |
+| D-079 | 14 November 2026 | Shell candidate Nushell withdrawn until a native port is verified | review | [wasm-abi.md](../architecture/wasm-abi.md#terminal-and-shell) |

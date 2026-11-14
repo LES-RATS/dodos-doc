@@ -1,0 +1,130 @@
+# Platform
+
+Statuses are defined in the [README](../README.md#status-legend). Sections with no status line had none in the source.
+
+This file covers boot, time, process state, restart, crash and shutdown, observability, power and sleep, installation, the reference hardware and the deployment surfaces.
+
+## Platform service
+
+**Decided, 14 November 2026.** The platform service is a trusted process that carries uACPI, PCI enumeration and interrupt routing.
+
+ACPI (the firmware interface that describes and controls the hardware) is handled by uACPI (MIT, version 7.0.0 of October 2026, designed to be embedded; verified 13 November 2026), rather than ACPICA. It is needed in any case to enumerate the hardware.
+
+Platform bring-up (UEFI, ACPI, PCI, interrupts, timers, start of the other cores) is step 1 of the [kernel track](../plan/roadmap.md#kernel-track).
+
+## Boot
+
+- Secure boot and the single signed EFI image are in [security.md](security.md#secure-boot); the boot image and the A/B/R slots are in [storage.md](storage.md#updates).
+- Levers for boot time: a single EFI image; services started at the first use of their capability; Wasm code already compiled in the cache; verification of blobs on read; drivers started in parallel; the shell rendered from its snapshot (see the [recorded conflict](../research/open-questions.md#recorded-conflicts) on snapshots).
+- Probable long point: loading the firmware of the GPU (to measure; from memory).
+- Devices are reset at boot, not at shutdown.
+- Microcode: a blob of the system, loaded by the kernel at boot (**Proposed**, 14 November 2026).
+- The boot and shutdown targets are in [plan/gates.md](../plan/gates.md#boot-and-shutdown).
+
+## Time
+
+**Proposed, 14 November 2026, to validate.** The kernel has only a monotonic clock. Wall-clock time is a service (NTS), and time zones are a blob.
+
+## Process state: suspend, resume and snapshots
+
+**Decided, 14 November 2026.** A **snapshot** is the frozen state of a process, stored so that the process can resume later. Version 1:
+
+1. An application saves its state itself, through two exports of the `app` world, `suspend` and `resume`, to its `home` collection.
+2. An automatic snapshot exists only for an idle Wasm component, after a one-week trial with Wasmtime.
+3. There is no snapshot for native code: a service restarts and reloads its state from storage.
+4. Memory pressure and crash recovery no longer assume snapshots.
+
+- The periodic snapshot of all processes is deferred until after the alpha.
+- Moving a surface between devices goes through `suspend` and `resume`, the only path that crosses two architectures.
+- The wider idea of the process snapshot as a primitive is in the [idea reservoir](../research/ideas.md#low-level-and-kernel).
+
+## Restart and hot replacement
+
+Every component of the system restarts or is replaced without rebooting the machine.
+
+- **Driver**: see [drivers.md](drivers.md#restart-of-a-driver).
+- **Service**: its durable state lives in storage and in the persistent handle table. Clients receive the error `gone` or reconnect, which rule 1 of the [ABI](wasm-abi.md#abi-rules) already requires them to handle.
+- **Kernel**: its own mechanism; see [kernel.md](kernel.md#core-by-core-replacement).
+- **Cost**: a pause, not a freeze. The pause is visible when it concerns the system disk or the GPU.
+
+## Crash and shutdown
+
+**Proposed**, with the changes decided on 14 November 2026.
+
+Principle: shutdown and crash follow the same path ("crash-only" software, Candea and Fox 2003, from memory). If the state on disk is consistent at every instant, switching off has nothing to tidy, and crash recovery is tested at every shutdown.
+
+| Event | Handling |
+|---|---|
+| A component or a service falls | Restart as above. A service reloads its state from storage; an application has the state it saved through `suspend` |
+| Power cut | Blobs are immutable and consistency comes from the SQLite journal (see [storage.md](storage.md#on-disk-format)), so there is no disk check at reboot. Modifiable objects are versioned. The periodic snapshot of processes, which would bound the loss to a few seconds of input (interval to set), is deferred until after the alpha |
+| Panic of one core's kernel | The kernel restarts alone and the machine continues; see [kernel.md](kernel.md#recovery-of-one-cores-kernel) |
+| Hang | A hardware watchdog armed by the kernel; a heartbeat per service, watched by the service manager |
+| Reboot loop | A/B/R slots, automatic rollback (see [storage.md](storage.md#updates)) |
+| Requested shutdown | Same path as a crash. Devices are reset at boot, not at shutdown. The earlier sequence ("last snapshot, root switch, power off") no longer holds as written; see the [recorded conflict](../research/open-questions.md#recorded-conflicts) |
+
+**Black box.** A ring buffer of the last seconds of messages per task, always active, attached to the crash report. The report stays local; the agent can explain it. A report leaves the machine only with the user's agreement, report by report (see [project-level questions](../research/open-questions.md#project-level-questions)).
+
+## Observability
+
+**Decided, 14 November 2026.** A system log, a profiler per capability, and a kernel debugger through the USB debug port.
+
+## Power and sleep
+
+- **Desktop**: no sleep at first. Screen off, processor idle states, frequency managed by the hardware (HWP).
+- **Laptop**: modern standby (s2idle), the only one that recent Intel laptops offer. The emulation layer must then replay the suspend callbacks of Linux drivers, in order.
+- **Resume after sleep**: a driver that does not wake up is restarted by the [driver restart protocol](drivers.md#restart-of-a-driver). The emulation layer must handle the D3 states.
+- **Wake word during sleep: a goal, not yet achieved.** Recent Intel laptops have a low-power signal processor that stays powered during sleep, and the open firmware SOF can run a keyword detector on it that wakes the machine. Obstacle: this firmware must be signed by the manufacturer, so only the existing signed firmware can be loaded, and a model injected into it if it contains the required module. To test on the Dell. Windows removed this function in 24H2 for power consumption reasons. On the desktop there is no such processor: light sleep with a detector on the CPU, or a small USB microphone with a microcontroller that wakes the machine. Verified 13 November 2026.
+
+## Installer and recovery
+
+**Proposed, 14 November 2026, to validate.**
+
+- Installer: the USB image is the system in an ephemeral session; to install is to write the partitions and copy the blobs.
+- Dual boot: cohabitation on a dedicated disk or on free space, without resizing the partitions of another system in version 1.
+- Recovery slot: a minimal image with network, storage, reinstallation, restore, diagnostics.
+- Firmware updates: UEFI capsules; source LVFS (from memory, to verify).
+
+## Printing and scanning
+
+**Proposed, 14 November 2026, to validate.** Driverless protocols (IPP Everywhere, eSCL), as a component, after version 1.
+
+## Hardware reference
+
+1. **Intel + NVIDIA desktop**: first (**Decided**). No battery and no mandatory Wi-Fi. The processor has no integrated GPU: the first pixels come from the firmware framebuffer (UEFI GOP), then from NVIDIA alone. The Intel path is developed on the Dell.
+2. **All-Intel Dell laptop**: next, when the emulation layer is mature. It requires the i915 or xe driver and the DRM interface that Mesa expects.
+3. **Mac M5**: when Asahi has progressed.
+
+**Machines** (**Decided**, 14 November 2026): two only, the reference desktop and the Dell laptop. The laptop serves as the control machine of the desktop (power, console, image) as long as it is not itself a target. The Mac M5 machines wait for Asahi; the project does no reverse engineering of its own. Hardware trials are therefore in series, and QEMU carries most of the work.
+
+## Deployment surfaces
+
+**Proposed.** Order:
+
+1. Reference desktop.
+2. (1 bis) Headless server image: almost free once the kernel has the disk and the network, and the first ground on which to sell the recovery of one core's kernel. The server image is a decided milestone (**Decided**, 14 November 2026).
+3. Laptops.
+4. Companion application on Android, iOS, Linux, macOS and Windows.
+5. Phones with an unlockable bootloader.
+6. Embedded, the last phase.
+
+This order was not written down before 14 November 2026.
+
+### Server
+
+**Proposed, 14 November 2026, to validate.**
+
+- A server runs `wasi:http` components launched per request; native software through POSIX as a library, later.
+- Administration: no remote root shell. The `dodo` tool and the agent go through the key-addressed transport (see [network.md](network.md#key-addressed-services)), with delegated administration capabilities. The configuration of a server is a hash.
+- Arguments: recovery of one core's kernel, kernel update without reboot, boot in one second.
+
+### Embedded
+
+What embedded imposes from now on, at low cost:
+
+- **Kernel**: everything that depends on x86-64 sits behind an architecture layer, to port to ARM64 and RISC-V. Target: processors with an MMU; microcontrollers without an MMU are out of scope.
+- **Wasm**: components compiled ahead of time, with no compiler on the device; an interpreter as fallback.
+- **Configuration**: the system is a hash, so an embedded image is another hash, with fewer services. No service assumes a screen, a GPU, a keyboard or a local agent.
+- **Interface**: the catalogue describes meaning (button, field, list), not layout. Each surface has its rendering template.
+- **Real time**: scheduling contexts with a budget and a deadline already suit it.
+- **Memory**: a gate "memory of an empty process" and the size of the minimal image, to set.
+- **Storage**: system and device zones only (see [storage.md](storage.md#zones)).

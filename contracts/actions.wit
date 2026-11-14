@@ -1,0 +1,168 @@
+// Actions: what makes a component drivable by the agent. System services
+// (settings, windows, network, install, power) export the same interface.
+//
+// Declaration lives in the signed package manifest, not here: for each
+// action, its name, description, input schema, output schema and effect
+// class. There is deliberately no `list-actions` function: a function could
+// change its answer after installation, and the component would have to run
+// to be asked. WIT has no free annotations, so the manifest is a separate
+// contract; the system reads it and serves it to the agent as `action-info`
+// (see `tasks`). This side only executes.
+//
+// OPEN: schema language. Assumed JSON Schema 2020-12 over the value encoding
+// of core.wit. How a schema marks a property as a storage item is for the
+// manifest contract to fix.
+// OPEN: actions are JSON plus a dynamic `invoke`, so the WIT breaking-change
+// check does not see a schema change. The manifest check must cover it.
+
+interface actions {
+  use types.{error};
+  use store.{collection, binding};
+
+  record request {
+    /// Action name as declared in the manifest: [a-z][a-z0-9-]{0,63}.
+    name: string,
+    /// JSON object matching the input schema. At most 65536 bytes; larger
+    /// data comes as an object. The value of a secret field arrives here,
+    /// straight from the system: it never passed through the surface owner.
+    input: string,
+    /// Storage arguments, by argument name: the property `name` of `input`
+    /// is this item. Attenuated by the system to the action's class
+    /// (read-only when change is `none`).
+    objects: list<binding>,
+    /// The component's own collection, attenuated the same way.
+    home: collection,
+  }
+
+  record outcome {
+    /// JSON object matching the output schema. At most 65536 bytes.
+    output: string,
+    /// Typed object results, by property name of `output`. Each needs
+    /// `share`.
+    objects: list<binding>,
+  }
+
+  record progress {
+    /// 0.0 to 1.0; none = unknown.
+    fraction: option<f32>,
+    /// Short text for the user. Third-party text: the system never feeds it
+    /// to a model as trusted.
+    note: string,
+  }
+
+  /// Runs one action in a fresh instance: nothing is shared with the running
+  /// application, and the instance is destroyed afterwards. It holds only
+  /// what `request` carries, and its imports are linked to match the class
+  /// (no network unless reach is `external`). This is what makes the
+  /// declared class binding.
+  ///
+  /// Progress: write to the stream, any number of times, then resolve the
+  /// future. Cancellation: the system drops both reading ends; stop, the
+  /// instance is destroyed shortly after.
+  ///
+  /// An action cannot say whether its output is trusted: the system stamps
+  /// the provenance (see `tasks.reply`).
+  invoke: func(request: request) -> tuple<stream<progress>, future<result<outcome, error>>>;
+}
+
+/// The agent's side: a task is the unit of delegation. It carries the
+/// delegated rights, the marks and the journal, and is revocable as a whole.
+interface tasks {
+  use types.{error, effect, marks, provenance, component-id};
+  use store.{binding};
+  use actions.{progress};
+
+  /// One action of the task scope, as declared in its package manifest.
+  record action-info {
+    app: component-id,
+    name: string,
+    description: string,
+    input-schema: string,
+    output-schema: string,
+    effect: effect,
+  }
+
+  record action-ref { app: component-id, name: string }
+
+  record reply {
+    /// Journal entry of this invocation; the handle for `undo`.
+    entry: u64,
+    output: string,
+    objects: list<binding>,
+    /// Set by the system. Untrusted for every third-party application.
+    /// Reading the reply has already added these marks to the task.
+    provenance: provenance,
+  }
+
+  record journal-entry {
+    id: u64,
+    action: action-ref,
+    effect: effect,
+    /// Open set: "running", "done", "failed", "refused", "cancelled",
+    /// "undone". Treat an unknown state as not undoable.
+    state: string,
+    /// True for a done action of change `reversible` and reach `local`.
+    undoable: bool,
+  }
+
+  resource task {
+    /// The two marks of the task: has read private data, has read untrusted
+    /// content. Marks are only ever added. Reading an object handle obtained
+    /// through this task adds the object's marks.
+    marks: async func() -> result<marks, error>;
+
+    /// The scope: actions this task may invoke, ordered by app then name.
+    /// limit <= 64.
+    available: async func(skip: u32, limit: u32) -> result<list<action-info>, error>;
+
+    /// The system decides from the action's class and the task's marks:
+    ///
+    ///   change        reach     not marked untrusted   marked untrusted
+    ///   none          local     runs                   runs
+    ///   reversible    local     runs, undoable         runs, undoable
+    ///   irreversible  local     confirmation           confirmation
+    ///   none          external  runs                   runs unless marked
+    ///                                                  private, then
+    ///                                                  confirmation
+    ///   other         external  confirmation           confirmation
+    ///
+    /// The confirmation is drawn by the system from the action's typed
+    /// schema and this exact input, never from text of the agent. The agent
+    /// cannot draw, skip or answer it. A refusal is the error `refused`.
+    ///
+    /// `objects` binds items to arguments by name. Progress and cancellation
+    /// as in `actions.invoke`: drop both reading ends to cancel.
+    invoke: func(action: action-ref, input: string, objects: list<binding>) -> tuple<stream<progress>, future<result<reply, error>>>;
+
+    /// Undoes one journal entry. `unsupported` if it is not undoable,
+    /// `conflict` if a later write touched the same objects.
+    undo: async func(entry: u64) -> result<_, error>;
+
+    /// Entries with id greater than `after`, oldest first. limit <= 256.
+    /// Read-only: the journal is written by the system.
+    journal: async func(after: option<u64>, limit: u32) -> result<list<journal-entry>, error>;
+
+    /// A sub-task whose scope is the given subset of this one, with its own
+    /// journal; revoking the parent revokes it.
+    /// OPEN: marks between parent and child. Chosen: the child starts with
+    /// the parent's marks, and a mark set in the child is set in the parent
+    /// at once. Safe, but a sub-task cannot quarantine untrusted reading;
+    /// that needs the per-value labels the document defers past version 1.
+    subtask: async func(actions: list<action-ref>) -> result<task, error>;
+  }
+}
+
+/// STUB. Model access for the agent: interchangeable models, local or cloud.
+/// The document fixes no interface. Nothing to implement yet.
+interface inference {}
+
+/// STUB. The agent's memory. The document only says: storage objects owned by
+/// the user, with provenance, append-only, merged by union across devices.
+/// Likely shape: a collection delegated to the task. Nothing to implement yet.
+interface memory {}
+
+/// STUB. Speech in and out for the agent. The document fixes the audio
+/// service and three separate rights (playback, microphone, capture), not an
+/// interface. The wake-word detector is a separate component with the
+/// microphone as only input. Nothing to implement yet.
+interface audio {}
