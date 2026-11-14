@@ -168,6 +168,20 @@ Hypothèse à recalculer après la semaine 2. Ce qui borne le rythme : une trent
 
 **Antériorité (constat 14).** À ajouter aux emprunts et à citer : Singularity, Midori, Hive, Escort, Redline, SUD, LKL, FIDES. Les revendications « aucun noyau trouvé » et « ne semble pas publiée » sont adoucies. Le chiffre de Barrelfish/DC est retiré jusqu'à lecture de l'article.
 
+**Derniers manques fermés (14 novembre 2026).**
+
+- Jetons du design system (décidé) : deux couches, primitives et rôles sémantiques, au format Design Tokens 2025.10. Un jeton de composant n'est créé que si un composant ne s'exprime pas par les rôles. Un seul fichier source, d'où sont générés les jetons pour gpui et pour CSS. Thèmes clair, sombre et contraste élevé par le module de résolution ; la densité est un jeu de jetons.
+- Catalogue (décidé) : deux niveaux, dans deux interfaces WIT versionnées à part, comme proposé dans la section du design system. Deux moteurs de rendu en version 1 : gpui dans le shell et CSS dans LibWeb.
+- Surface de l'agent (décidé) : une surface du shell, en verre, appelée par une touche ou par le mot d'éveil. Barre de saisie en bas au centre ; elle s'étend en panneau latéral droit pour une tâche longue et son journal. Une interface générée est une carte dans le panneau, que l'utilisateur peut détacher en surface ordinaire. Une confirmation est dessinée par le système au-dessus de la surface concernée. Sur écran étroit, une feuille en bas.
+- Wi-Fi (décidé) : pile Linux (mac80211 et iwlwifi) par la couche d'émulation, avec les portables, après l'alpha. Bluetooth : après l'alpha.
+- Mémoire : un objet anonyme partagé est compté à son créateur ; le budget d'une tâche est puisé par tous ses processus ; NUMA hors périmètre tant qu'aucune cible n'en a ; pages de 1 Go après l'alpha.
+- Appareil perdu : n'importe quel appareil du cercle retire sa clé ; ses capacités sont révoquées au prochain contact, et son disque reste chiffré.
+- A2UI : nous écrivons notre compilateur Rust depuis la spécification et ses suites de conformité.
+- Distribution des paquets en version 1 : blobs servis par hash sur un hébergement HTTPS statique, avec manifeste signé. Registre de conteneurs : après l'alpha.
+- Publications : papier de position après la première démonstration publique.
+- Applications Electron : non planifié.
+- Documentation (décidé) : ce fichier est archivé. La documentation devient un ensemble de fichiers en anglais, par domaine, avec un journal des décisions.
+
 ## Architecture
 
 ```
