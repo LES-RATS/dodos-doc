@@ -11,7 +11,7 @@ The kernel is a capability microkernel. A **capability** is a token that designa
 | Kernel | Capability microkernel, 64-bit only, written from the model and not translated from seL4 | Decided |
 | seL4 ABI | No lasting dependency. seL4 serves only as a black-box oracle for differential tests (see [verification](../plan/verification.md#kernel-verification)) | Decided |
 | Languages | Kernel in Zig and Rust: Zig for the hardware layer and the IPC fast path, Rust for the logic (capabilities, object life cycle, scheduling policy). Rust for the system userland. Odin rejected | Decided |
-| Zig / Rust boundary | Types are defined once in Rust `repr(C)`; a C header is generated and imported by Zig. No call crosses the boundary on the fast path. `zig build` drives cargo and does the linking | Aligned |
+| Zig / Rust boundary | Types are defined once in Rust `repr(C)`; a C header is generated and translated for Zig by the build (Zig 0.17 removed `@cImport`; translation goes through the `translate_c` package, checked on Zig 0.17.1 on 14 November 2026). No call crosses the boundary on the fast path. `zig build` drives cargo and does the linking | Aligned |
 | System calls | System calls sit behind a code page supplied by the kernel and are never called directly. A system call is accepted only when it comes from that page; this is checked on entry | Decided (the entry check on 14 November 2026) |
 | Kernel shape | Event-driven kernel with no per-thread kernel stack, which allows hot replacement | Aligned |
 | System call duration | Every system call has a bounded duration, with resumption points, and the bound is verified | Decided, 14 November 2026 |
@@ -79,6 +79,23 @@ Cores on demand are deferred until after the alpha (**Decided**, 14 November 202
 3. **Recovery.** The order is: isolate the core, reset the devices whose driver ran on it, reclaim the memory, reload the kernel. The kernel is reloaded through the normal core start-up path. References to its objects return `gone`, which rule 1 of the ABI already requires callers to handle. A driver follows the [driver restart protocol](drivers.md#restart-of-a-driver). Recovery does not assume process snapshots: what happens to the processes that ran on the core follows [platform.md](platform.md#process-state-suspend-resume-and-snapshots).
 4. **Later, research.** Adopt the state of the old kernel after validation, instead of starting again from saved state (Otherworld does this for Linux, with a stated 97 % success rate).
 5. **Core with a hardware fault.** It is removed, and the machine continues with the others.
+
+```mermaid
+sequenceDiagram
+    participant A as Kernel of core A
+    participant B as Kernel of core B, faulty
+    participant V as Supervisor service
+    participant M as Memory service
+    B--xA: heartbeat stops, or panic reported
+    A->>V: core B is down
+    V->>B: core_stop, the core is isolated
+    V->>V: resets the devices whose driver ran on B
+    V->>M: reclaim the memory of B
+    M->>A: which pages of B do you still map?
+    A-->>M: the list, and unknown pages go to quarantine
+    V->>B: core_start with a kernel image
+    Note over A,B: capabilities to objects of the old kernel now return gone
+```
 
 Further rules:
 

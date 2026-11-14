@@ -25,6 +25,32 @@ Terms used in the diagram:
 
 Applications, services and drivers see only stable WIT worlds. Only raw system calls are private, behind the code page supplied by the kernel (see [wasm-abi.md](wasm-abi.md#abi-stability)).
 
+## Processes and boundaries
+
+Each box is a separate process. Solid arrows are IPC (control); dotted arrows are shared-memory rings (data), which never enter the kernel. Every process enters the kernel of the core it runs on; two are drawn.
+
+```mermaid
+flowchart TD
+    agent["Agent"]
+    app["Application: Wasm component in the runtime"]
+    shell["Shell and compositor"]
+    svc["Services: storage, network, GPU, memory, placement"]
+    drv["Drivers: native, or Linux driver on the emulation layer"]
+    dev["Devices, behind the IOMMU"]
+    k0["Kernel of core 0"]
+    k1["Kernel of core 1"]
+
+    agent -->|typed actions| app
+    app -->|WIT calls| svc
+    app -->|surface| shell
+    shell -.->|rings| svc
+    svc -->|class interface, then rings| drv
+    drv -->|registers, interrupts, DMA| dev
+    svc -->|system calls| k0
+    drv -->|system calls| k1
+    k0 ---|messages only| k1
+```
+
 ## How the pieces fit
 
 | Layer | Pieces | Detailed in |

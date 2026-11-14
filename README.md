@@ -9,6 +9,20 @@ DodOS is an operating system that is still being designed. Its direction, in fou
 
 State of the documentation: 14 November 2026. The content comes from a brainstorming process. Only statements marked **Decided** are firm.
 
+## Repositories
+
+```mermaid
+flowchart LR
+    doc["dodos-doc: design, decisions, progress"]
+    kernel["dodos-kernel: kernel, reference model, oracle, interface in code"]
+    system["DodOS: user space, WIT contracts, SDK, image"]
+    doc -->|kernel-interface.md is the contract of| kernel
+    doc -->|describes| system
+    system -->|pins by commit| kernel
+```
+
+Where the work stands: [plan/progress.md](plan/progress.md).
+
 ## Map
 
 | File | Content |

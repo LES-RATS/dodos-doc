@@ -72,6 +72,23 @@ Why this stays cheap here:
 - **Blobs** are mapped whole or by runs (see [Pager](#pager)).
 - **Remaining faults** are those that already wait for something slow: decompression, disk, copy on write.
 
+A page fault on a blob that is not yet in memory:
+
+```mermaid
+sequenceDiagram
+    participant T as Faulting thread
+    participant K as Kernel
+    participant M as Memory service
+    participant D as Storage service
+    T->>K: touches an unmapped page
+    K->>M: fault message on the fault endpoint
+    M->>D: asks for a run of pages of the blob
+    D-->>M: frames, filled through a shared ring
+    M->>K: aspace_map, the whole run in one call
+    M->>K: reply
+    K->>T: resumes
+```
+
 Gate: the cost of one fault resolved from memory already present, against the same fault on Linux (see [gates](../plan/gates.md#overhead-gates)). If the gate fails, the fall-back is a small in-kernel table for one case, not a full memory object.
 
 ## Messages
@@ -187,6 +204,21 @@ A start-up page, versioned, with a table of entries (kind, offset, length):
 | Long operation (revocation, teardown) | Bounded steps with `again` | A bounded kernel cannot loop | The caller's latency. Other threads are not delayed |
 | Call between components (WIT, WASI 0.3) | Asynchronous in its type, synchronous in its execution when the callee finishes without waiting | Short calls must cost a plain IPC | The measured overhead of the asynchronous form (3.5 times, see [gates](../plan/gates.md#overhead-gates)) must apply only to calls that really wait |
 
+A call on one core, from a client to a service and back:
+
+```mermaid
+sequenceDiagram
+    participant C as Client thread
+    participant K as Kernel of the core
+    participant S as Service thread
+    C->>K: call on an endpoint capability
+    Note over K: checks the capability, stamps badge and task marks
+    K->>S: direct switch, on the client's budget
+    Note over S: does the work
+    S->>K: reply_recv
+    K->>C: direct switch back, budget returned
+```
+
 What is measured, in the trials of weeks 1-2 and then at each merge:
 
 - round trip of `call` on one core, against seL4 MCS;
@@ -229,6 +261,19 @@ A gate is added: faults per megabyte read on a cold sequential read.
 - **Sticky by default.** A process that receives a marked message takes the marks, and keeps them until it is restarted. Everything it sends is marked. Marks only ever add, so the default cannot lose one.
 - **Mark-aware services.** A short list of system services (storage, network, clipboard, compositor) hold a capability that turns this off. For them the marks follow the call, like the budget, and the service stores the marks with the data: a record written by a marked call is read back marked. Each one is part of the trusted base and has its own attack test.
 - **Applications** are not concerned: an agent action runs in a fresh instance (see [agent.md](agent.md)).
+
+How a mark travels:
+
+```mermaid
+flowchart TD
+    web["Web page, untrusted"] --> A["Agent action, fresh instance"]
+    A -- "message marked untrusted" --> P["Ordinary service: becomes marked until restart"]
+    A -- "message marked untrusted" --> S["Storage, mark-aware: stores the mark with the record"]
+    P -- "everything it sends is marked" --> X["Any receiver"]
+    S -- "record read back marked" --> R["Later reader"]
+    R --> Q{"Irreversible or external effect?"}
+    Q -- yes --> U["Confirmation drawn by the system"]
+```
 
 Known limit, as in every information-flow system: timing and other covert channels are not covered.
 
