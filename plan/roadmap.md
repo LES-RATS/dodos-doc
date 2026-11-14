@@ -33,6 +33,7 @@ On Linux and macOS:
 
 On QEMU, then on the reference desktop:
 
+0. The [kernel interface](../architecture/kernel-interface.md) (objects and system calls), written before any kernel code. Then debugging before features: serial console, debugger stub, trace buffer, crash record; a small native shell and tools as soon as a first process runs. The kernel boots on the reference desktop from the first week, not only on QEMU (**Decided**, 14 November 2026).
 1. Platform bring-up (UEFI, ACPI, PCI, interrupts, timers, start of the other cores), capabilities, IPC, model and oracle on one core.
 2. Multi-core by messages, distributed revocation, recovery of a kernel, scheduling, memory, mlibc and the Rust standard library, first native service, virtio.
 3. IOMMU, native NVMe driver, keyboard, network stack, Linux emulation for the network card, server image.

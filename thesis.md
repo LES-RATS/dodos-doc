@@ -19,7 +19,7 @@ Three reasons to exist:
 - Latency is a contract, checked by gates. Fast gates run at every merge and hardware gates run at night (see [plan/gates.md](plan/gates.md)).
 - No ambient authority: a program has only what it is handed.
 - The user owns the machine and the data.
-- No monorepo: one repository per component. The kernel, its executable model, the oracle harness and `os:core` live in a single repository, because they form one component (**Decided**, 14 November 2026; see [plan/verification.md](plan/verification.md#kernel-verification)).
+- **Repositories** (**Decided**, 14 November 2026; replaces "one repository per component"). Two code repositories, split later if needed. The **kernel repository** holds the kernel, its executable model, the oracle harness, the formal models, the proofs and the [kernel interface](architecture/kernel-interface.md) with its generated bindings; nothing in it knows Wasm or WIT. The **system repository** holds everything in user space: runtime, services, drivers, shell, applications, the WIT contracts (including `os:core`), the SDK and the image build. It pins the kernel by commit, and moving the pin runs the system's checks. This documentation repository keeps the cross-cutting design and the decision log.
 - The kernel is the centrepiece, the part that sells. The project starts from existing work to move fast, but the goal is to bring something new to the kernel (see the [kernel research axes](research/prior-art.md#kernel-research-axes)), then to the OS itself.
 - **Portable and built to last** (**Decided**, 14 November 2026): the whole system, from the last application down to the kernel, is designed to be ported and to survive over time. Support for several architectures is part of this: nothing assumes x86-64 outside the architecture layer.
 - **English for development** (**Decided**, 14 November 2026): code, comments, commits, `AGENTS.md`, decision records, repository documentation.
@@ -31,7 +31,7 @@ Three reasons to exist:
 |---|---|---|
 | Games | Wasm and cloud only | Decided |
 | Native applications | Set aside for now: Wasm and WIT remain the only application ABI. See [architecture/wasm-abi.md](architecture/wasm-abi.md#native-applications) | Aligned |
-| Virtual machines | Out of scope as a way to run anything on the OS. Linux drivers in micro-VMs are a known alternative that was not retained (see [architecture/drivers.md](architecture/drivers.md#drivers-in-micro-vms-alternative-not-retained)) | Decided |
+| Virtual machines | Out of scope as a way to run anything on the OS. Linux drivers in micro-VMs are a known alternative that was not retained (see [architecture/drivers.md](architecture/drivers.md#drivers-in-micro-vms-fallback)) | Decided |
 
 ## Out of scope
 

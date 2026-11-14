@@ -63,7 +63,7 @@ The kernel is written from an executable model. The order for the kernel is neve
 - **Lock-free queues**: systematic exploration of interleavings; load tests on hardware.
 - **Attack tests**: one attack test per boundary (IOMMU, capabilities, executable pages, compile service), which must fail.
 - **Mutation test** on the kernel logic, with a ratchet.
-- **One repository**: the kernel, its model, the oracle harness and `os:core` live in a single repository: they form one component. "No monorepo" stays true for the rest.
+- **One repository**: the kernel, its model, the oracle harness, the formal models and the [kernel interface](../architecture/kernel-interface.md) live in the kernel repository. `os:core` and the other WIT contracts live in the system repository with the runtime (see [thesis.md](../thesis.md#principles); **Decided**, 14 November 2026).
 - **Software rendering and a virtio-gpu driver**, to test the compositor under QEMU (see [gpu.md](../architecture/gpu.md#fallback-and-test-paths)).
 
 ### Formal proof

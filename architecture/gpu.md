@@ -18,7 +18,8 @@ Statuses are defined in the [README](../README.md#status-legend).
 **Decided; mechanism verified 13 November 2026.**
 
 - The OS-independent core of NVIDIA's open modules (the `src/` folder) is adapted by the project's own glue, without the Linux layer `kernel-open`. The NVIDIA driver does not go through the [Linux emulation layer](drivers.md#linux-driver-emulation-layer).
-- Vulkan by NVK, starting from the Mesa fork of the Haiku port (X547/mesa, branch `mesa-nvk-r2`), because official NVK talks only to nouveau.
+- The kernel side comes from NVIDIA's own repository (`NVIDIA/open-gpu-kernel-modules`), not from the Haiku port; the Haiku glue (`X547/nvidia-haiku`) is only an example to read.
+- Vulkan by NVK, starting from the Mesa fork of the Haiku port (X547/mesa, branch `mesa-nvk-r2`), because official NVK talks only to nouveau. This patch is the work of one person and its branch has not moved since 31 December 2025 (checked 14 November 2026): the project carries and rebases it itself.
 - Performance of NVK: less than half of the proprietary driver on average on an RTX 5080 (Phoronix, March 2026); about 70 % observed by the project on an older card (CS2 at 1440p); progressing fast. Performance on the reference machine's card remains to be measured (**Open**).
 - For inference, Vulkan is behind CUDA by about 10 % in generation and 36 % in prompt reading, on the proprietary driver.
 - The proprietary GSP firmware is required.

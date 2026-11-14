@@ -112,6 +112,7 @@ Rejected, from the same study: a single address space shared between components 
 
 ## Related
 
+- Objects and system calls: [kernel-interface.md](kernel-interface.md).
 - Scheduling mechanism: [scheduling.md](scheduling.md).
 - Memory mechanism: [memory.md](memory.md).
 - IOMMU objects: [drivers.md](drivers.md#iommu).

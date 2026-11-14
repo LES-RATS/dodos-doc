@@ -80,7 +80,7 @@ The wider idea of writing native class drivers first, and of using the Linux dri
 
 **Aligned** (retained with the user's agreement, to be designed; second delegated study of 14 November 2026, not cross-checked). A driver's manifest is deduced from traces (MMIO ranges, DMA windows per ring, interrupts), and review bears on the difference at each update. Limit: rare paths (sleep, errors) are missing from the traces.
 
-## Drivers in micro-VMs: alternative not retained
+## Drivers in micro-VMs: fallback
 
 Principle: a minimal Linux in one virtual machine per driver, the device passed through by the IOMMU, the data through the same shared queues. LionsOS (seL4) does this as a fallback for network, disk, sound and a 2D GPU (verified 13 November 2026; figures of the authors).
 
@@ -89,4 +89,4 @@ Principle: a minimal Linux in one virtual machine per driver, the device passed 
 | For | Every Linux driver works unmodified, including Wi-Fi, Bluetooth with BlueZ and the proprietary NVIDIA driver (CUDA, DLSS, full video decoding). No emulation layer to write or maintain. Kernel version upgrades are trivial. Equivalent isolation |
 | Against | A hypervisor to add to the kernel, so more trusted code and more tests outside the oracle. 50 to 250 MB of memory and a Linux boot per VM (order of magnitude, from memory). A driver restart takes seconds. Interrupts cross the VM, so latency. Sleep must be coordinated with each guest. GPU: scanout and scheduling would stay in the guest, which breaks the latency gates and the role of the GPU service. No published overhead figure |
 
-**Position.** The emulation layer is on the critical path. The micro-VM remains a possible fallback for the long tail (Wi-Fi, Bluetooth, exotic hardware), to be reopened only if emulation stalls. Virtual machines are otherwise out of scope (**Decided**; see [thesis.md](../thesis.md#scope)).
+**Position** (**Decided**, 14 November 2026). The emulation layer is mandatory and is carried to the end. The micro-VM is plan B, for the drivers that tolerate it (Wi-Fi, Bluetooth, exotic hardware), opened only if emulation stalls on a driver. The kernel interface reserves the name of a virtual-processor object and builds nothing (see [kernel-interface.md](kernel-interface.md#objects)). Virtual machines are otherwise out of scope (**Decided**; see [thesis.md](../thesis.md#scope)).

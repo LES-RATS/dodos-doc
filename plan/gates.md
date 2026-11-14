@@ -48,6 +48,8 @@ The latency gates are the authoritative test for the compositor (see [verificati
 | Disk read and write | Raw NVMe device | ≥ 90 % of the throughput; one throughput gate per type of workload (Decided, 14 November 2026) |
 | Network throughput | Linux on the same card | ≥ 90 % |
 | IOMMU active | Same load, IOMMU off | ≤ 3 % |
+| Kernel entries per unit of work: per displayed frame, per disk read, per network packet (Decided, 14 November 2026; see [data plane](../architecture/kernel-interface.md#data-plane)) | | To set |
+| Page faults per megabyte on a cold sequential read (Decided, 14 November 2026; see [pager](../architecture/kernel-interface.md#pager)) | | To set |
 | Verification of blobs | Read without verification | ≤ 5 % cold, 0 warm |
 | Memory of an empty application process | | To set |
 | Cost of a minor page fault and of a mapping | Linux | To set |
