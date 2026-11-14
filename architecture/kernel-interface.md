@@ -129,7 +129,13 @@ Open: where marks are stored for a thread that serves several tasks in turn (a s
 
 A small native shell and a few tools (list capabilities, read memory, start and stop a thread, read traces) are ported as soon as the kernel starts a first process. They are native programs, outside the Wasm runtime, and they stay in the rescue image.
 
-Agents drive the same tools: QEMU's console and monitor and the debugger stub are all text. A trial in weeks 1-2 checks that an agent can boot a kernel, read its console and set a breakpoint without help.
+Agents drive the same tools: QEMU's console and monitor and the debugger stub are all text. No trial is needed: agents already worked through a virtual machine in the user's earlier kernel benchmarks.
+
+## Architectures
+
+**Proposed, 14 November 2026.** The source layout follows seL4: one directory per architecture and one per platform, chosen at build time, with no run-time abstraction layer. The interface does not follow seL4 on one point: seL4 exposes architecture-specific objects (page-table levels, per-architecture calls), while this interface is the same on every architecture. The kernel builds page tables itself, from supplied memory, behind `aspace_map`. The only architecture-specific object is `ioports`.
+
+The kernel needs only a timer, an interrupt controller and a serial port from the platform. Everything else (ACPI or device tree, buses) is discovered in user space, so that one image serves a whole architecture rather than one board.
 
 ## Language split
 
@@ -145,6 +151,9 @@ The Zig part is the architecture layer plus the fast path, so it is rewritten fo
 
 - The exact message format: number of register words, and how capabilities are transferred in a message.
 - The `cspace` layout, and whether a slot number is stable across a suspend.
+- Whether `memobj` is a kernel object at all. The alternative keeps only page frames in the kernel (as seL4 does) and builds memory objects, copy on write and paging in the memory service. It keeps the kernel smaller and easier to prove, at the price of one more service on the fault path.
 - Whether `memobj_clone` (copy on write) is in version 1 or follows the snapshot work.
+- Marks that leak through the stored state of a service: a service that keeps data from a marked call and returns it to an unmarked caller.
+- Missing sections: the first process's start-up information, the list of rights, the error codes, the size of each object.
 - User interrupts as a second wake-up path (see [kernel.md](kernel.md#hardware-features)).
 - Marks for a thread that serves several tasks.
