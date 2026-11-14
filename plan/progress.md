@@ -97,8 +97,8 @@ A box below cannot turn orange before its decision is taken and written in the [
 
 | Decision to take | Blocks | Notes |
 |---|---|---|
-| Who clears frames: the kernel, or the memory service | The memory part of the kernel interface, and the memory service | The kernel does not clear them today. The memory service gives pages from one process to another without the kernel, so it must clear in any case. To decide with a measure |
-| How the root of authority survives the loss of one core's kernel | Multi-core by messages | The start-up untyped capabilities never leave the start-up space of one kernel (D-103). Barrelfish/DC keeps the root of the capability tree in an object another kernel can adopt, but states that it does not consider fault tolerance |
+| Who clears frames: the kernel, or the memory service | The memory part of the kernel interface, which is itself needed before the one-core kernel is written | The kernel does not clear them today. The memory service gives pages from one process to another without the kernel, so it must clear in any case. To decide with a measure |
+| How the root of authority survives the loss of one core's kernel | One-core kernel, for what it fixes in `abi/` and in the layout of objects (generation number in a reference, share of memory per core in the start-up information); multi-core by messages for the rest | Direction decided (D-107): the root is rebuilt from a fixed share, nothing is adopted. To design before the one-core kernel is written |
 | Cancelling a wait | One-core kernel | Decided (D-106): `thread_cancel`; to add to `abi/` and to the model in pull request 3 |
 
 Weeks and dates are in the [calendar](roadmap.md#calendar).
