@@ -22,6 +22,8 @@ Trois raisons d'exister :
 - L'utilisateur possède sa machine et ses données.
 - Pas de monorepo : un dépôt par composant.
 - Le noyau est la pièce maîtresse, celle qui se vend. On part de l'existant pour aller vite, mais le but est d'y apporter du nouveau (voir « Axes de recherche du noyau »), puis dans l'OS lui-même.
+- **Portable et fait pour durer** (décidé, 14 novembre 2026) : tout le système, de la dernière application au noyau, est conçu pour être porté et survivre dans le temps. Le support de plusieurs architectures en fait partie : rien ne suppose x86-64 hors de la couche d'architecture.
+- **Anglais pour le développement** (décidé, 14 novembre 2026) : code, commentaires, commits, `AGENTS.md`, fiches de décision, documentation des dépôts. Ce document reste en français tant qu'il sert à la discussion ; il sera traduit en entrant dans un dépôt de développement.
 
 ## Décisions
 
@@ -202,11 +204,43 @@ Principe : l'arrêt et la panne suivent le même chemin (logiciel « crash-only 
 
 - **Un composant ou un service tombe** : redémarrage ci-dessus, état repris depuis son instantané.
 - **Coupure de courant** : les blobs sont immuables et la racine du stockage bascule de façon atomique, donc pas de vérification du disque au redémarrage. Les objets modifiables sont versionnés. Les processus sont pris en instantané à intervalle régulier : on perd au plus quelques secondes de saisie. Intervalle à fixer.
-- **Panique du noyau** : arrêt de tous les cœurs, trace écrite dans une zone réservée (région NVMe ou variable UEFI), redémarrage, surfaces rendues depuis les instantanés. On ne tente pas de survivre à un noyau incohérent.
+- **Panique d'un noyau de cœur** (proposé sur demande de l'utilisateur ; remplace « on arrête tout ») : un noyau qui panique redémarre seul, la machine continue. Les noyaux ne partagent pas d'état et se parlent par messages, donc la panne d'un seul est celle d'un nœud dans un système réparti.
+  1. Confinement : chaque noyau ne mappe que sa propre mémoire, et valide tout message reçu d'un autre noyau. Sans cela, un noyau fautif peut écrire chez ses voisins et rien n'est garanti.
+  2. Détection : panique, battement entre noyaux, erreur matérielle signalée sur le cœur.
+  3. Reprise : les voisins isolent le cœur, le noyau y est rechargé par le chemin normal de mise en route d'un cœur. Les références vers ses objets rendent `gone`, que la règle 1 de l'ABI impose déjà de traiter. Les processus qui y tournaient reprennent depuis leur instantané, sur ce cœur ou un autre. Un pilote suit le protocole de redémarrage.
+  4. Plus tard, recherche : adopter l'état de l'ancien noyau après validation, au lieu de repartir des instantanés (Otherworld le fait pour Linux, 97 % de réussite annoncés).
+  5. Cœur matériellement défaillant : retiré, la machine continue avec les autres.
+  - Arrêt complet seulement si le confinement lui-même est violé ou si la panne se répète. Trace écrite dans une zone réservée, puis redémarrage.
+  - Le même chemin sert à remplacer le noyau cœur par cœur : mise à jour du noyau sans redémarrage.
+  - Contrôle : la simulation déterministe tue un noyau au hasard à chaque fusion et vérifie que le reste survit. Porte à fixer : durée de reprise d'un cœur.
+  - Conséquence sur le choix ouvert du multithread : le journal répliqué (NrOS) est un état partagé entre noyaux, plus difficile à rendre sûr si un noyau meurt en pleine écriture ; les groupes de cœurs par messages s'y prêtent mieux.
+  - Antériorité (recherche web du 14 novembre 2026, résumés seulement) : Barrelfish/DC remplace le noyau d'un cœur à chaud, sans évaluation de panne trouvée ; Quest-V reprend après panne mais isole ses noyaux par virtualisation ; Kmorph (Linux, hors arbre) tient un noyau de secours qui reprend la machine en une seconde environ. Candidat à un quatrième axe à revendiquer, argument fort côté serveur ; à faire vérifier.
 - **Blocage** : chien de garde matériel armé par le noyau, battement par service surveillé par le gestionnaire.
 - **Boucle de redémarrage** : emplacements A/B/R, retour arrière automatique (déjà aligné).
 - **Boîte noire** : tampon circulaire des dernières secondes de messages par tâche, toujours actif, joint au rapport de panne. Le rapport reste local ; l'agent peut l'expliquer.
 - **Arrêt demandé** : dernier instantané, bascule de la racine, coupure. Les périphériques sont réinitialisés au démarrage, pas à l'arrêt.
+
+## Stockage : zones et portée (proposé)
+
+Pas d'arborescence globale. Le disque porte deux partitions, et le stockage se découpe en zones qui diffèrent par leur portée, leur chiffrement, leur sauvegarde et leur durée de vie.
+
+Partitions : (1) partition EFI en FAT32, imposée par le firmware, qui porte les images de démarrage signées des emplacements A/B/R et n'est écrite que par la mise à jour ; (2) notre magasin, qui porte tout le reste, plus une petite région brute pour la trace de panne.
+
+| Zone | Contenu | Portée | Chiffrée | Sauvegardée, synchronisée | Durée de vie |
+|---|---|---|---|---|---|
+| Système | Blobs de l'image, désignés par le hash du système | Machine, lecture seule | Non (public, vérifié) | Non (retéléchargeable) | Jusqu'au retrait de l'emplacement |
+| Paquets | Blobs et manifestes des applications, modèles | Machine, partagés entre utilisateurs | Non | Non | Ramasse-miettes par références |
+| Cache | Code compilé, vignettes, index | Machine ou utilisateur | Selon l'origine | Non | Effaçable à tout moment |
+| Appareil | Clés d'appairage, réseaux, réglages matériels | Machine, disponible avant la session | Oui, clé du TPM | Non | Jusqu'à la remise à zéro |
+| Utilisateur | Collections de la personne, mémoire de l'agent, versions | Un utilisateur | Oui, clé de l'utilisateur | Oui | Permanente |
+| Application | La collection `home` reçue au lancement | Un utilisateur et une application | Oui | Oui | Retirée avec l'application, sur confirmation |
+| Instantanés | État figé des processus | Un utilisateur | Oui | Non, sauf déplacement de surface | Remplacé à chaque prise |
+| Éphémère | Fichiers temporaires, session invitée | Une tâche ou une session, en mémoire | Sans objet | Non | Fin de la tâche |
+| Étranger | Clés USB, disques d'autres systèmes, partages réseau | Vu comme une collection, par un composant lecteur | Selon le support | Non | Tant que le support est branché |
+
+- La vue POSIX des logiciels portés est fabriquée par la table de noms du processus : `/tmp` vers la zone éphémère, le dossier personnel vers la zone d'application.
+- Remise à zéro : effacer les zones appareil et utilisateur. Embarqué : zones système et appareil seulement.
+- Ouvert : (1) objets très modifiés (base de données d'une application, image disque) : une suite de blobs immuables coûte cher en écritures aléatoires, il faut sans doute un type d'objet modifiable par extents, sans arbre de Merkle ; (2) plusieurs disques, miroir ; (3) quotas par application ; (4) durée de garde des versions ; (5) mémoire d'échange : compression d'abord, région chiffrée ensuite, à décider ; (6) les paquets installés par un utilisateur sont visibles des autres, à accepter ou non.
 
 ## IOMMU
 
@@ -468,7 +502,7 @@ Ajouts du 14 novembre :
 
 ## Déploiement et surfaces (proposé)
 
-Ordre : (1) desktop de référence ; (2) portables ; (3) application compagnon sur Android, iOS, Linux, macOS et Windows ; (4) téléphones à bootloader libre ; (5) embarqué, dernière phase. Cet ordre n'était pas écrit dans ce document avant le 14 novembre 2026.
+Ordre : (1) desktop de référence ; (1 bis, ouvert) image serveur sans écran, presque gratuite dès que le noyau a le disque et le réseau, et premier terrain pour vendre la reprise d'un noyau de cœur ; (2) portables ; (3) application compagnon sur Android, iOS, Linux, macOS et Windows ; (4) téléphones à bootloader libre ; (5) embarqué, dernière phase. Cet ordre n'était pas écrit dans ce document avant le 14 novembre 2026.
 
 Ce que l'embarqué impose dès maintenant, à coût faible :
 
@@ -501,6 +535,16 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 - ABI native pour les applications, pour l'instant.
 - 32 bits.
 - Auto-hébergement du développement.
+
+## Ce qui n'est pas encore traité (relevé du 14 novembre 2026)
+
+- **Système** : comptes, session, plusieurs utilisateurs, récupération d'une clé perdue ; sauvegarde, restauration, changement de machine ; installateur, premier démarrage, double amorçage, contenu de l'emplacement de secours ; mises à jour des firmwares et du microcode ; pression mémoire ; horloge, fuseaux, synchronisation de l'heure ; langues, écritures, méthodes de saisie ; réglages, notifications, écran des droits ; impression, numérisation.
+- **Réseau** : DNS, VPN, pare-feu exprimé en capacités, Wi-Fi (ouvert).
+- **Médias** : codecs et leurs brevets, vidéo protégée (DRM) dans le navigateur, polices et leurs licences.
+- **Serveur** : ce qu'un serveur DodOS exécute (composants `wasi:http`, bases de données), administration à distance.
+- **Développeur** : terminal et langage de shell, compiler sur DodOS même, débogage, profilage, traces.
+- **Sécurité** : modèle de menace écrit, gestion des clés de signature, réponse aux failles, canaux auxiliaires entre composants d'un même processus.
+- **Projet** : qui achète et quoi, calendrier et jalons, première démonstration publique, coût en jetons des agents, accord de contribution (obligatoire pour la double licence), statut du droit d'auteur sur le code écrit par des agents (à poser au juriste), marque, politique de télémétrie.
 
 ## Questions ouvertes
 
