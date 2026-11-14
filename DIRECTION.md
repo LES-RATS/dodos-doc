@@ -600,7 +600,7 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 - Calendrier, jalons, budget en jetons : à fixer avec le plan d'implémentation.
 - Télémétrie : aucune par défaut ; un rapport de panne part sur accord, rapport par rapport.
 - Accord de contribution : licence de contribution avec droit de relicencier, plutôt que cession. Texte et statut du code écrit par des agents : juriste.
-- Nom (vérifié le 14 novembre 2026) : pas d'organisation GitHub `dodos` ; `dodos.org` (2010) et `dodos.io` (2021) sont pris, `dod-os.org` est libre. Marque non vérifiée.
+- Nom (vérifié le 14 novembre 2026) : le nom `dodos` est pris sur GitHub par un compte utilisateur, il faudra un autre nom d'organisation ; `dodos.org` (2010) et `dodos.io` (2021) sont pris, `dod-os.org` est libre. Marque non vérifiée.
 
 Restent ouverts, à voir ensemble : structure des jetons du design system, extension du catalogue, placement de la surface de l'agent, Wi-Fi, FRED sur le processeur de référence, relecture des « Contrôles par étape ».
 
