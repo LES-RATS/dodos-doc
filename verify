@@ -1,0 +1,8 @@
+#!/bin/sh
+# The single verification command, identical locally and in CI.
+set -eu
+cd "$(dirname "$0")"
+# Every internal link and anchor must resolve. archive/ and reviews/ are
+# records and are not edited, so they are not checked.
+lychee --offline --include-fragments --no-progress \
+  --exclude-path archive --exclude-path reviews .
