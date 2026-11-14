@@ -87,7 +87,7 @@ flowchart TD
 
 | Item | Who | State |
 |---|---|---|
-| Reference model, one core | Claude Fable 5.2 | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3). Follows D-106 (`thread_cancel`); 405 tests, CI green; mutation: 176 of 177 killed on the whole model at pass 8 (the last is equivalent), 26 of 26 on `thread_cancel`. Reviewed four times (thirteen reports in `reviews/`); the last two reviews found no design error and no wrong behaviour. To do: re-reading by the two humans, then merge |
+| Reference model, one core | Claude Fable 5.2 (passes 1 to 9), Claude Opus 5.5 (pass 10) | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3), head `517b289`. Follows D-109 (wait number for `thread_cancel`); 453 tests, CI green; mutation: 176 of 177 killed on the whole model at pass 8 (the last is equivalent), 54 of 54 on what pass 10 changed; the whole-model mutation was not rerun after pass 9. Reviewed five times (seventeen reports in `reviews/`); the fifth review found no wrong behaviour and one design error in D-106, corrected by D-109. Pass 10 is not yet reviewed from outside. To do: pass 11 for what D-110 changes in the reviewed groups, sixth review, re-reading by the two humans, then merge |
 | Package manifest contract | | Not started |
 | Trials of weeks 1-2 | | Not started |
 
@@ -100,6 +100,6 @@ A box below cannot turn orange before its decision is taken and written in the [
 | Who clears frames: the kernel, or the memory service | The memory part of the kernel interface, which is itself needed before the one-core kernel is written | The kernel does not clear them today. The memory service gives pages from one process to another without the kernel, so it must clear in any case. To decide with a measure |
 | How the root of authority survives the loss of one core's kernel | One-core kernel, for what it fixes in `abi/` and in the layout of objects (generation number in a reference, share of memory per core in the start-up information); multi-core by messages for the rest | Direction decided (D-107): the root is rebuilt from a fixed share, nothing is adopted. To design before the one-core kernel is written |
 | Nodes, cores and load (D-108, proposed) | One-core kernel, for the layout of kernel state as a node | To validate by the two humans: [kernel.md](../architecture/kernel.md#nodes-cores-and-load) |
-| Cancelling a wait | One-core kernel | D-106 corrected by D-109 after the fifth review (a wait number, so that a cancel is neither lost nor hits a later call). Contract written; `abi/` and the model follow in pass 10 of pull request 3 |
+| Cancelling a wait | One-core kernel | D-106 corrected by D-109 after the fifth review (a wait number, so that a cancel is neither lost nor hits a later call). Contract, `abi/` and model done (pass 10 of pull request 3); to review by the two humans |
 
 Weeks and dates are in the [calendar](roadmap.md#calendar).
