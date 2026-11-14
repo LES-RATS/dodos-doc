@@ -87,7 +87,7 @@ flowchart TD
 
 | Item | Who | State |
 |---|---|---|
-| Reference model, one core | Claude Fable 5.2 | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3). To do: follow the revision D-100, review by Gemini, re-reading by the two humans |
+| Reference model, one core | Claude Fable 5.2 | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3). Follows D-101; 200 tests, CI green. To do: follow D-102, review by Gemini, re-reading by the two humans |
 | Package manifest contract | | Not started |
 | Trials of weeks 1-2 | | Not started |
 
