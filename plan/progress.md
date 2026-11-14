@@ -87,7 +87,7 @@ flowchart TD
 
 | Item | Who | State |
 |---|---|---|
-| Reference model, one core | Gemini 4 Hydrogen | To launch on 15 November 2026 |
+| Reference model, one core | Gemini 4 Hydrogen | In progress since 14 November 2026, branch `model-one-core` of the kernel repository |
 | Package manifest contract | | Not started |
 | Trials of weeks 1-2 | | Not started |
 
