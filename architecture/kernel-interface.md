@@ -434,6 +434,9 @@ The Zig part is the architecture layer plus the fast path, so it is rewritten fo
 
 ## Open points
 
+- **The depth rule and a machine that does not die.** The start-up `untyped` capabilities never leave the start-up space, which lives in one core's kernel. The multi-core part must say how the root of authority survives the loss of that kernel: one start-up space per core, each able to recreate the supervisor and the memory service, or another answer. Until then the first process is a single point of failure, as the root task of seL4 is.
+- **Cancelling a wait.** A thread blocked in `call` can be woken only by the death of the server or of the reply object; suspension cancels nothing. A call that wakes a waiting thread with an error is to be added, so that time limits can be built outside the kernel (timer, notification, cancel).
+- **Who clears frames** is decided with the memory part: the kernel does not clear them today (design choice), and the memory service gives pages from one process to another without the kernel in the common case.
 - Numbers (error codes, bits of the rights, kinds, calls, layout of the header) are defined in `abi/`, which is the reference for values; this document names them.
 - Raised by the fourth review, to settle with their groups: what becomes of a thread whose address space or fault endpoint is destroyed; the slot of each start-up capability in the start-up page; `task_revoke` "in one operation" against bounded steps; whether a frame is an object in the table of sizes; the number of the reserved kind `vcpu`.
 - Message words in registers once APX is available (see [kernel.md](kernel.md#hardware-features)).
