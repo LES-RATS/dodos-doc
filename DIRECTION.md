@@ -437,6 +437,35 @@ Trois points de conception (proposé, 14 novembre 2026) :
 - **Groupe de cœurs d'un processus multithread.** Un processus détient un groupe de cœurs : l'ensemble des cœurs où son espace d'adresses est actif. Les opérations sur l'espace d'adresses (mappage, révocation, invalidation de TLB) ne concernent que ce groupe. Le service de placement agrandit ou réduit le groupe selon la charge ; c'est ici que se branche la structure dynamique. Le budget est une réserve du groupe, où chaque contexte par cœur puise des tranches. Un groupe est d'un seul type de cœur par défaut. Le noyau notifie le runtime du nombre de cœurs qu'il a à l'instant, pour qu'il dimensionne ses threads au lieu de surcharger (idée des scheduler activations, de mémoire). Un thread préempté alors qu'il tient un verrou : celui qui attend lui prête son contexte, par le même mécanisme de prêt que ci-dessus.
 - **Temps passé dans les interruptions.** Les pilotes sont en espace utilisateur : une interruption n'est dans le noyau qu'un acquittement et une notification, de durée bornée. Ce temps est mesuré par horodatage à l'entrée et à la sortie, retiré au thread interrompu et débité au contexte du pilote. Le pilote traite sur son propre contexte ; budget épuisé, sa ligne d'interruption reste masquée jusqu'à la recharge, ce qui borne une tempête d'interruptions. Une complétion d'entrée-sortie est débitée au client dont la requête se termine : la requête porte une tranche de son budget. Les interruptions des périphériques hors classe image sont dirigées vers les cœurs économes ou regroupées en début de période.
 
+Compléments (proposé, 14 novembre 2026) :
+
+- **Qui obtient quelle classe** : la classe image est une capacité. Le shell la remet à la surface au premier plan et aux services de son chemin (entrée, compositeur, audio), et la reprend quand la surface passe derrière. Une application ne peut pas se la donner.
+- **Travail de fond** : part équitable entre tâches, pondérée par l'utilisateur ou l'agent ; une part minimale garantie évite la famine.
+- **Inférence de l'agent** : classe interactif pendant qu'il répond à l'utilisateur, classe fond sinon ; ses lots GPU sont préemptibles à chaque image.
+- **Réveils** : chaque minuteur déclare une tolérance ; le noyau regroupe les réveils dans cette tolérance pour laisser dormir les cœurs.
+- **Chaleur et batterie** : le service de placement réduit d'abord les budgets de la classe fond, puis ferme des cœurs rapides ; la classe image est touchée en dernier.
+- **Valeurs de départ, à calibrer** : période de la classe image égale à celle de l'écran (8,3 ms à 120 Hz) ; réserve de la classe image plafonnée à la moitié de chaque cœur rapide ; tranche de la classe fond de 10 ms.
+- **Contrôles** : simulation déterministe de l'ordonnanceur (mêmes graines que les messages entre cœurs), et les portes de latence.
+
+## Gestion de la mémoire (proposé, 14 novembre 2026)
+
+Même partage que l'ordonnancement : mécanisme dans le noyau, politique en espace utilisateur.
+
+- **Pas de tas dans le noyau.** Toute mémoire dont le noyau a besoin pour un objet vient d'une capacité de mémoire fournie par celui qui crée l'objet (modèle de seL4, de mémoire). Un programme ne peut donc pas épuiser la mémoire du noyau.
+- **Mémoire physique par cœur** : chaque noyau a sa réserve de pages, sans verrou ; les réserves se rééquilibrent par messages. NUMA plus tard.
+- **Objets mémoire** (modèle de Fuchsia) : un ensemble de pages désigné par une capacité, qui se mappe, se partage et se copie à l'écriture. C'est l'unité de partage entre processus et le support de l'instantané.
+- **Pagination en espace utilisateur** : un défaut de page sur un objet adossé au stockage devient un message au service de stockage. Les blobs sont mappés tels quels : le cache de pages est l'ensemble des blobs, partagé par hash entre tous les processus.
+- **Espace d'adresses** : les tables de pages sont la seule source de vérité, sans seconde structure à garder cohérente (approche de CortenMM). Invalidation de TLB limitée au groupe de cœurs du processus.
+- **Tailles de page** : 2 Mo par défaut pour les mémoires Wasm et le code compilé, 4 Ko sinon. Une mémoire Wasm réserve son espace virtuel avec des pages de garde, ce qui retire les contrôles de bornes.
+- **Budget, sans surengagement** : chaque tâche porte un budget mémoire. Une page anonyme est comptée à la tâche au premier accès ; une page de blob partagé est comptée au système. Budget dépassé : erreur d'allocation rendue au runtime, pas de processus tué plus tard par surprise.
+- **Pression** : politique du service de mémoire, déjà notée (caches, compression des pages de fond, instantané des surfaces non visibles). Pas de mémoire d'échange en v1.
+- **Remise à zéro** : toute page est remise à zéro avant de changer de processus, par les cœurs économes au repos.
+- **Mémoire du GPU** : gérée par le service GPU avec les mêmes budgets par tâche. Les poids d'un modèle sont des blobs mappés, partagés entre processus.
+- **Pilotes** : mémoire épinglée par une capacité à part, mappages IOMMU durables.
+- **Protections** : écriture ou exécution, jamais les deux (déjà noté) ; disposition aléatoire ; pages de garde autour des piles.
+- **Portes à ajouter** : coût d'un défaut de page mineur et d'un mappage par rapport à Linux ; mémoire d'un processus vide.
+- À concevoir : comptabilité exacte des pages partagées entre deux tâches, mémoire d'une tâche étalée sur plusieurs processus, NUMA, grandes pages de 1 Go pour l'inférence.
+
 ## Communication entre appareils (proposé)
 
 Principe : un autre appareil n'est qu'un détenteur de capacités de plus. Tout étant déjà une capacité derrière une interface WIT, exposer un objet, une action ou un périphérique à distance ne demande pas d'API à part (transparence réseau de Plan 9).
@@ -556,15 +585,17 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 
 **Réseau**
 
-- Pas de pare-feu au sens classique : sans capacité réseau, pas de réseau. La capacité porte sa portée (hôtes, ports, sortant ou entrant) ; écouter est une capacité à part.
+- Pas de pare-feu séparé : le service réseau en tient lieu. Une application n'a aucun accès au réseau sans capacité, et la capacité porte sa portée (hôtes, ports, sortant ou entrant). Tout paquet entrant sans capacité d'écoute correspondante est jeté.
+- Ouvrir un port : l'application demande dans son manifeste une capacité d'écoute (protocole, port, portée : machine, cercle d'appareils, réseau local ou internet). L'utilisateur l'accorde à l'installation ou au premier usage ; sur un serveur, elle est écrite dans la configuration. Portée internet : le service réseau demande la redirection au routeur (PCP, UPnP), ou mieux, expose le service par le transport par clé, sans aucun port ouvert. Révoquer la capacité ferme le port.
+- Ce qui reste d'un pare-feu : limitation de débit dans le service réseau, et une politique d'administration qui borne les capacités qu'on peut accorder.
 - DNS chiffré par défaut dans le service réseau ; mDNS local.
 - VPN : un composant WireGuard qui reçoit une capacité réseau et en fournit une autre.
 - Wi-Fi : reste ouvert (comparaison Linux et Fuchsia prévue).
 
 **Médias**
 
-- Codecs libres d'abord (AV1, VP9, Opus, FLAC). H.264 et AAC par FFmpeg et Vulkan Video ; brevets à poser au juriste.
-- Vidéo protégée : aucune voie vers Widevine aujourd'hui. Un navigateur indépendant attend encore sa licence (Zen), et rien trouvé sur EME dans Ladybird (recherche du 14 novembre 2026, sources communautaires). Position : limite assumée et affichée ; le contournement est la diffusion depuis un autre appareil. À réévaluer avec du volume.
+- Codecs libres d'abord (AV1, VP9, Opus, FLAC). AV2 à suivre : spécification 1.0 publiée le 28 mai 2026, environ 30 % de débit en moins qu'AV1 ; pas de décodeur optimisé ni de matériel grand public trouvé (recherche du 14 novembre 2026). Rien à faire avant qu'un décodeur optimisé existe ; il entrera comme un composant de plus. H.264 et AAC par FFmpeg et Vulkan Video ; brevets à poser au juriste.
+- Vidéo protégée : aucune voie vers Widevine aujourd'hui. Un navigateur indépendant attend encore sa licence (Zen), et rien trouvé sur EME dans Ladybird (recherche du 14 novembre 2026, sources communautaires). L'utilisateur signale que Zen a reçu sa licence le 14 novembre 2026 (vu sur X, non retrouvé par recherche) : si c'est confirmé, la voie existe pour un navigateur indépendant, à des conditions à connaître. Position d'ici là : limite assumée et affichée ; le contournement est la diffusion depuis un autre appareil. À réévaluer avec du volume.
 - Polices : une famille système sous licence OFL, Noto pour la couverture des écritures et les emoji.
 
 **Serveur**
@@ -597,7 +628,21 @@ Suites de tests qui font foi : oracle différentiel (noyau), WPT (web), suite WA
 
 - Qui achète : (1) licence commerciale pour les fabricants d'appareils et intégrateurs qui ne veulent pas de l'AGPL ; (2) support et licence côté serveur ; (3) services facultatifs (relais, sauvegarde, magasin) ; (4) une machine de référence. À trancher.
 - Première démonstration publique, proposition : l'agent qui agit en sécurité sur des applications dans l'userland hébergé (étapes 1 à 3 de la piste hébergée), et le noyau qui démarre sous QEMU en passant l'oracle.
-- Calendrier, jalons, budget en jetons : à fixer avec le plan d'implémentation.
+- Calendrier (proposé ; estimations sans mesure, à recalculer à chaque jalon d'après le débit réel des agents) :
+
+  | Période | Piste hébergée | Piste noyau | Jalon |
+  |---|---|---|---|
+  | Décembre 2026 | Étape 0 : dépôt modèle, CI, `AGENTS.md`, modèle de menace | idem | Socle prêt |
+  | T1 2027 | Runtime, outil `dodo`, surface | Démarrage, capacités, IPC, oracle (QEMU) | Porte IPC mesurée |
+  | T2 2027 | Actions et agent | SMP, ordonnancement, mémoire, premier processus natif | Première démonstration publique, papier de position |
+  | T3 2027 | Shell | IOMMU, pilotes NVMe, USB, réseau ; reprise d'un noyau de cœur | Démarrage sur le desktop de référence |
+  | T4 2027 | Magasin de blobs, paquets signés | Image serveur sans écran | Première image serveur |
+  | T1 2028 | | Cœur NVIDIA et NVK | Triangle Vulkan |
+  | 2028 | Convergence : Ladybird, compositeur réel, portes de latence, audio, veille | | Alpha sur le desktop de référence |
+  | 2029 | Portables, application compagnon | | Bêta |
+
+- Budget en jetons (proposé) : une enveloppe mensuelle fixée par l'utilisateur, montant à donner. Répartition de départ : noyau 45 %, userland 25 %, revue et vérification 20 %, recherche 10 %. Plafond par tâche ; au-delà, l'agent s'arrête et remonte (règle déjà dans le harnais). Modèle le plus capable pour la voie contrat, le noyau et les revues ; modèle économique pour la recherche et l'entretien. Le coût par fusion est mesuré et publié dans la CI, et sert à recalculer le calendrier.
+- Dépôt : `github.com/Vehicoule/dodOS` (public, créé le 13 novembre 2026, vide). Nom d'organisation : plus tard.
 - Télémétrie : aucune par défaut ; un rapport de panne part sur accord, rapport par rapport.
 - Accord de contribution : licence de contribution avec droit de relicencier, plutôt que cession. Texte et statut du code écrit par des agents : juriste.
 - Nom (vérifié le 14 novembre 2026) : le nom `dodos` est pris sur GitHub par un compte utilisateur, il faudra un autre nom d'organisation ; `dodos.org` (2010) et `dodos.io` (2021) sont pris, `dod-os.org` est libre. Marque non vérifiée.
