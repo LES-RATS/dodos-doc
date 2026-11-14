@@ -87,7 +87,7 @@ flowchart TD
 
 | Item | Who | State |
 |---|---|---|
-| Reference model, one core | Claude Fable 5.2 | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3). Follows D-105; 389 tests, 176 of 177 mutants killed (the last is equivalent), CI green. Reviewed four times (thirteen reports in `reviews/`); the last two reviews found no design error and no wrong behaviour. To do: re-reading by the two humans, then merge |
+| Reference model, one core | Claude Fable 5.2 | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3). Follows D-106 (`thread_cancel`); 405 tests, CI green; mutation: 176 of 177 killed on the whole model at pass 8 (the last is equivalent), 26 of 26 on `thread_cancel`. Reviewed four times (thirteen reports in `reviews/`); the last two reviews found no design error and no wrong behaviour. To do: re-reading by the two humans, then merge |
 | Package manifest contract | | Not started |
 | Trials of weeks 1-2 | | Not started |
 
@@ -99,6 +99,6 @@ A box below cannot turn orange before its decision is taken and written in the [
 |---|---|---|
 | Who clears frames: the kernel, or the memory service | The memory part of the kernel interface, which is itself needed before the one-core kernel is written | The kernel does not clear them today. The memory service gives pages from one process to another without the kernel, so it must clear in any case. To decide with a measure |
 | How the root of authority survives the loss of one core's kernel | One-core kernel, for what it fixes in `abi/` and in the layout of objects (generation number in a reference, share of memory per core in the start-up information); multi-core by messages for the rest | Direction decided (D-107): the root is rebuilt from a fixed share, nothing is adopted. To design before the one-core kernel is written |
-| Cancelling a wait | One-core kernel | Decided (D-106): `thread_cancel`; to add to `abi/` and to the model in pull request 3 |
+| Cancelling a wait | One-core kernel | Done (D-106): `thread_cancel` is in `abi/` and in the model, pull request 3 |
 
 Weeks and dates are in the [calendar](roadmap.md#calendar).
