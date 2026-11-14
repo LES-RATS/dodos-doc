@@ -24,7 +24,7 @@ The kernel knows nothing about Wasm, WIT or components. The runtime and the serv
 | `untyped` | A range of physical memory, not yet typed. The only source of memory for other objects | seL4 |
 | `cspace` | A table of capability slots. Flat, and grown by supplying memory. Deliberately simpler than the guarded tables of seL4 | To design |
 | `aspace` | An address space: page tables, built from supplied memory. One copy per core in the core group | seL4, CortenMM |
-| `memobj` | A set of pages that can be mapped, shared and copied on write. May be backed by a pager | Fuchsia VMO |
+| `frame` | A run of physical pages of one size (4 KB, 2 MB, 1 GB). A frame capability records at most one mapping; mapping the same pages twice needs a derived capability | seL4 |
 | `thread` | A register set, bound to a `cspace`, an `aspace` and a fault endpoint | seL4 |
 | `sched` | A scheduling context: budget, period, deadline, core class, allowed cores | seL4 MCS |
 | `endpoint` | A synchronous rendezvous point for call and reply. A derived capability carries a badge that identifies the caller | seL4 |
@@ -39,7 +39,9 @@ The kernel knows nothing about Wasm, WIT or components. The runtime and the serv
 | `debug` | Console, trace buffer, crash record | Project |
 | `vcpu` | Reserved name, not built. It exists only if the [micro-VM fallback](drivers.md#drivers-in-micro-vms-fallback) is opened | — |
 
-Device memory (MMIO) is an `untyped` marked as device memory; it can only become a `memobj` that is mapped, never a kernel object.
+Device memory (MMIO) is an `untyped` marked as device memory; it can only become a `frame` that is mapped, never a kernel object.
+
+The **memory object** of [memory.md](memory.md#memory-objects) (sharing, copy on write, paging, compression) is not a kernel object. It is built by the memory service from frames (**Proposed**, 14 November 2026; recommendation of the assistant, see [Memory outside the kernel](#memory-outside-the-kernel)).
 
 ## System calls
 
@@ -48,7 +50,7 @@ About 40 calls. All take capability slots and words in registers.
 | Group | Calls | Notes |
 |---|---|---|
 | Capabilities | `cap_derive`, `cap_move`, `cap_delete`, `cap_revoke`, `cap_inspect` | `cap_derive` copies with fewer rights or with a badge. `cap_revoke` deletes everything derived from a capability; it is the distributed two-phase protocol between kernels, and it returns `again` |
-| Memory | `untyped_retype`, `memobj_clone`, `memobj_supply`, `memobj_evict`, `aspace_map`, `aspace_unmap`, `aspace_protect` | `memobj_supply` and `memobj_evict` are the pager's calls. `aspace_map` accepts a range and a page size, so one call maps a large block |
+| Memory | `untyped_retype`, `aspace_map`, `aspace_unmap`, `aspace_protect` | `aspace_map` accepts a run of frames and a page size, so one call maps a large block |
 | IPC | `call`, `reply_recv`, `recv`, `send`, `signal`, `wait`, `poll` | `call` and `reply_recv` are the fast path. `send` never blocks. `wait` waits on a `notify`, or on an endpoint with a bound `notify` |
 | Threads | `thread_configure`, `thread_read_regs`, `thread_write_regs`, `thread_resume`, `thread_suspend`, `yield` | |
 | Scheduling | `sched_configure`, `sched_bind`, `sched_unbind`, `sched_set_cores` | Admission control is in `sched_configure`. `sched_set_cores` is reserved to the placement service |
@@ -59,6 +61,117 @@ About 40 calls. All take capability slots and words in registers.
 | Debug | `debug_write`, `trace_emit` | Present in every build; the capability decides who may call them |
 
 Faults are not calls. A page fault, an illegal instruction or a budget overrun becomes a message on the thread's fault endpoint; the handler answers through the `reply` object.
+
+## Memory outside the kernel
+
+**Proposed, 14 November 2026.** The kernel knows frames and mappings, nothing else. Memory that is already mapped costs nothing more. The extra cost is on faults only: one IPC round trip to the memory service instead of a path inside the kernel.
+
+Why this stays cheap here:
+
+- **No lazy anonymous memory.** Memory is accounted at reservation, without overcommit (see [memory.md](memory.md#budget-without-overcommit)). The memory service therefore maps a reservation at once, in large pages, from a pool of pages zeroed in advance. The first touch of a page, the most frequent fault on Linux, does not exist.
+- **Blobs** are mapped whole or by runs (see [Pager](#pager)).
+- **Remaining faults** are those that already wait for something slow: decompression, disk, copy on write.
+
+Gate: the cost of one fault resolved from memory already present, against the same fault on Linux (see [gates](../plan/gates.md#overhead-gates)). If the gate fails, the fall-back is a small in-kernel table for one case, not a full memory object.
+
+## Messages
+
+**Proposed, 14 November 2026.**
+
+A message is a header word, message words, and optionally capabilities.
+
+| Part | Content |
+|---|---|
+| Header | Label (32 bits, opaque to the kernel: the method), number of words, number of capabilities, flags |
+| Words in registers | 6 on x86-64. A message that fits here and carries no capability takes the fast path |
+| Words in the message page | Up to 64 in all. Each thread has one page shared with the kernel for this |
+| Capabilities | Up to 4 per message |
+
+Larger data never goes in a message: the sender shares frames (rule 8).
+
+The receiver gets, with the message and set by the kernel:
+
+- the **badge** of the endpoint capability the sender used, which identifies the sender;
+- the **marks** of the sender's task (64 bits; bit 0 private, bit 1 untrusted, the others reserved);
+- the **task identifier**, for the log.
+
+### Capability transfer
+
+- The sender lists slots in its message page, each one as *move* or *derive* (with reduced rights). It needs the `grant` right on the endpoint.
+- The receiver declares a range of empty slots before it waits.
+- Transfer is all or nothing. If the receiver has too few slots, no capability moves; the receiver sees the flag `caps_dropped` and the caller is told in the reply.
+- A derived capability stays in the sender's derivation tree, so the sender, or its task, can revoke it.
+- Between cores, the transfer is recorded on both kernels before either side uses it (the [memory ownership invariant](kernel.md#multi-core-structure)).
+
+## Rights
+
+A capability carries a set of rights. `cap_derive` can only remove rights.
+
+| Right | Meaning |
+|---|---|
+| `read`, `write` | Map a frame readable or writable; read or change an object's state |
+| `exec` | Map a frame executable. Only the compile service receives frames with this right ([research axis 5](../research/prior-art.md#kernel-research-axes)) |
+| `send` | Call or send on an endpoint; signal a notification |
+| `recv` | Receive on an endpoint; wait on a notification |
+| `grant` | Transfer capabilities through an endpoint |
+| `derive` | Derive further capabilities from this one |
+| `manage` | Configure the object (bind, set parameters, attach to a task) |
+
+## Errors
+
+A fixed, small set. Every caller handles `gone` and `again`.
+
+| Code | Meaning |
+|---|---|
+| `ok` | |
+| `gone` | The capability was revoked or the object deleted, possibly because its kernel was reloaded |
+| `again` | A bounded step was done; repeat the call |
+| `denied` | A right is missing |
+| `invalid` | Bad slot, wrong object type or bad argument |
+| `no_memory` | The supplied untyped memory is exhausted; supply more and repeat |
+| `no_slot` | No free capability slot |
+| `busy` | The object is in a state that forbids the call |
+| `budget` | Admission refused: the scheduling budgets exceed the period |
+| `would_wait` | A non-blocking call found nothing |
+| `unsupported` | Not available on this architecture or kernel version |
+
+## Object sizes
+
+Provisional. Sizes are fixed per kernel version and published in the kernel-supplied code page; user space never hard-codes them.
+
+| Object | Size |
+|---|---|
+| Capability slot | 32 bytes (object, rights, badge, links of the derivation tree) |
+| `endpoint`, `notify`, `reply`, `timer`, `irq` | 64 bytes |
+| `sched` | 128 bytes |
+| `task` | 256 bytes |
+| `thread` | 1 KB, plus the vector state area, whose size depends on the processor |
+| `aspace`, `iospace` | One root table (4 KB); lower tables are taken from supplied memory as mappings need them |
+| `cspace` | 32 bytes per slot, grown by supplying memory |
+| `frame` | No object: the capability slot holds the mapping record |
+
+## Start-up information
+
+**Proposed, 14 November 2026.** The kernel of the boot core starts one process, the first service of the boot image, and gives it everything. No other authority exists in the system.
+
+Capabilities, in fixed slots:
+
+- its own `cspace`, `aspace`, `thread` and `sched`;
+- every `untyped`, ordinary and device;
+- one `core` capability per core; the other cores are stopped;
+- the control capabilities for interrupts, I/O ports and IOMMU domains;
+- the `debug` capability;
+- the frames of the boot image.
+
+A start-up page, versioned, with a table of entries (kind, offset, length):
+
+- interface version and object sizes;
+- the list of `untyped` ranges (address, size, device or not);
+- the core list, with the class of each core;
+- firmware tables (ACPI root pointer, UEFI memory map, framebuffer);
+- an entropy seed;
+- the time stamps of the boot so far, for the [boot gates](../plan/gates.md#boot-and-shutdown);
+- the crash record of the previous boot, if there is one.
 
 ## Synchronous or asynchronous
 
@@ -86,7 +199,7 @@ A blocking system call (wait in the kernel with a kernel stack) is rejected: it 
 
 ## Data plane
 
-**Decided, 14 November 2026.** Data never crosses IPC. Disk blocks, network packets, audio frames and display buffers move through single-producer single-consumer rings in shared `memobj` objects (model of sDDF; see [drivers.md](drivers.md#driver-framework)). IPC sets the rings up, and a `notify` wakes a side that sleeps.
+**Decided, 14 November 2026.** Data never crosses IPC. Disk blocks, network packets, audio frames and display buffers move through single-producer single-consumer rings in shared frames (model of sDDF; see [drivers.md](drivers.md#driver-framework)). IPC sets the rings up, and a `notify` wakes a side that sleeps.
 
 A gate counts the kernel entries per unit of work: per displayed frame, per disk read, per network packet (see [gates](../plan/gates.md#overhead-gates)).
 
@@ -94,7 +207,7 @@ A gate counts the kernel entries per unit of work: per displayed frame, per disk
 
 **Decided, 14 November 2026.** Paging stays in user space (see [memory.md](memory.md#paging-in-user-space)), with two rules that keep its cost bounded:
 
-- **Read-ahead.** A fault is answered with a run of pages, not with one page. The pager chooses the run; `memobj_supply` accepts a range.
+- **Read-ahead.** A fault is answered with a run of pages, not with one page. The pager chooses the run and maps it in one `aspace_map`.
 - **Large mappings.** A blob that is mapped whole (compiled code, model weights) is supplied in one call, in 2 MB pages where its size allows.
 
 A gate is added: faults per megabyte read on a cold sequential read.
@@ -109,7 +222,15 @@ A gate is added: faults per megabyte read on a cold sequential read.
 - `task_mark` only adds marks. A task that has read untrusted data stays marked.
 - `task_revoke` removes every right of the task in one operation. It is `cap_revoke` on the root of the task, so it uses the same distributed protocol.
 
-Open: where marks are stored for a thread that serves several tasks in turn (a service). The first answer: the marks follow the call, like the budget.
+### Marks and services
+
+**Proposed, 14 November 2026.** A service could keep data from a marked call and hand it to an unmarked caller, which would lose the mark. The rule:
+
+- **Sticky by default.** A process that receives a marked message takes the marks, and keeps them until it is restarted. Everything it sends is marked. Marks only ever add, so the default cannot lose one.
+- **Mark-aware services.** A short list of system services (storage, network, clipboard, compositor) hold a capability that turns this off. For them the marks follow the call, like the budget, and the service stores the marks with the data: a record written by a marked call is read back marked. Each one is part of the trusted base and has its own attack test.
+- **Applications** are not concerned: an agent action runs in a fresh instance (see [agent.md](agent.md)).
+
+Known limit, as in every information-flow system: timing and other covert channels are not covered.
 
 ## Power states
 
@@ -149,11 +270,10 @@ The Zig part is the architecture layer plus the fast path, so it is rewritten fo
 
 ## Open points
 
-- The exact message format: number of register words, and how capabilities are transferred in a message.
+- Message words in registers once APX is available (see [kernel.md](kernel.md#hardware-features)).
 - The `cspace` layout, and whether a slot number is stable across a suspend.
-- Whether `memobj` is a kernel object at all. The alternative keeps only page frames in the kernel (as seL4 does) and builds memory objects, copy on write and paging in the memory service. It keeps the kernel smaller and easier to prove, at the price of one more service on the fault path.
-- Whether `memobj_clone` (copy on write) is in version 1 or follows the snapshot work.
-- Marks that leak through the stored state of a service: a service that keeps data from a marked call and returns it to an unmarked caller.
-- Missing sections: the first process's start-up information, the list of rights, the error codes, the size of each object.
+- The cost of a fault handled by the memory service, to measure against a fault handled in the kernel (see [Memory outside the kernel](#memory-outside-the-kernel)).
+- Copy on write in the memory service: in version 1, or with the snapshot work.
+- The spread of sticky marks in practice: how many services end up marked during normal use, measured on the injection attack suite.
+- The numbers of this draft (message words, sizes, slot counts), to fix after the one-core model.
 - User interrupts as a second wake-up path (see [kernel.md](kernel.md#hardware-features)).
-- Marks for a thread that serves several tasks.

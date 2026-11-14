@@ -111,6 +111,8 @@ ReactiveScript (solidjs, MIT, experimental version 0.1 of October 2026): a react
 - **Engines**, later: librime (Chinese, BSD, portable), libhangul (Korean, LGPL, so in a separate component), mozc (Japanese, very heavy to build: Bazel and JDK).
 - **Ladybird** (**Open**): text composition exists in LibWeb, wired today through Qt. It is to be wired to the project's protocol.
 
+- **Pointer prediction** (idea of the user, 14 November 2026; **Proposed**). The speed and direction of the pointer predict where it is going. Uses: prepare the likely target (hover state, preloading, focus), and compensate the display latency of the cursor. Not applied to full-screen surfaces, which receive raw input. To measure: the error on stops and sharp turns, since an overshooting cursor is worse than a late one.
+
 ## Localisation
 
 **Proposed, 14 November 2026, to validate.** ICU4X for locales; input engines as Wasm components with no network, plugged into the text input protocol; English and French in version 1; message format to choose (Fluent or MessageFormat 2).
