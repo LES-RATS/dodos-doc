@@ -47,6 +47,16 @@ The kernel has its own replacement mechanism, based on versioned object formats 
 - **A process has a home node**, the one its memory comes from. Its core group may spread to other nodes, which hold remote mappings recorded on both sides. If the home node is lost the process is lost. If another node of the group is lost the process loses the threads that ran there, which is reported to it, and continues.
 - **No node is necessary to the machine.** The supervisor and the memory service exist on at least two home nodes. A service that must survive the loss of a node does the same.
 
+**The one question that separates the candidates: may a node run on more than one core at the same time?**
+
+| Answer | What it gives | What it costs |
+|---|---|---|
+| No (the proposal above) | A kernel with no lock; the duration of a call never depends on another core | A process with threads on several cores spans several nodes: page tables and capabilities kept coherent by messages, the hardest point of the project |
+| Yes, in groups fixed at start-up (pairs, or the cores that share a cache; the two hardware threads of one core are the smallest group and would use the thread left idle by D-028) | A multithreaded process inside one group has one address space and one capability space, with no protocol between kernels | One lock in the kernel, held by the cores of the group only; two ways of running to verify, locked inside a group and by messages between groups |
+| Yes, in groups that change size with the load (idea of the user: six cores under one kernel for a process that needs six, the others kept apart as the safety net) | The same, sized to the process | The same, and moving a running core from one node to another |
+
+In the three cases a panic is contained in one node, a process dies with its home node, and the rest of the machine continues. Precedent for the second, from memory, to verify: the clustered multikernel studied for seL4 (von Tessin, 2012), and the fact that a microkernel spends little time in the kernel, which makes one lock for a few cores cheap. The trial of weeks 1-2 measures the three on the same bench before this is decided.
+
 Open in this proposal: the cost of running a parked node (Barrelfish/DC measures a naive time-sharing of 20 ms slices); how a survivor tells a reference to a reloaded node from an old one (a generation number); what the placement service needs from the kernel to decide.
 
 Reasons recorded for the messages-only variant: kernels that share no state and talk by messages make the failure of one kernel the failure of one node in a distributed system. A replicated log (the NrOS technique) is state shared between kernels, which is harder to make safe if a kernel dies in the middle of a write.
