@@ -87,7 +87,7 @@ flowchart TD
 
 | Item | Who | State |
 |---|---|---|
-| Reference model, one core | Claude Fable 5.2 | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3). Follows D-105; 347 tests, 89 of 90 mutants killed (the last is equivalent), CI green. Reviewed three times (nine reports in `reviews/`); the last review found no design error. To do: re-reading by the two humans, then merge |
+| Reference model, one core | Claude Fable 5.2 | Written from the settled contract; [pull request 3](https://github.com/Vehicoule/dodos-kernel/pull/3). Follows D-105; 389 tests, 176 of 177 mutants killed (the last is equivalent), CI green. Reviewed four times (thirteen reports in `reviews/`); the last two reviews found no design error and no wrong behaviour. To do: re-reading by the two humans, then merge |
 | Package manifest contract | | Not started |
 | Trials of weeks 1-2 | | Not started |
 
