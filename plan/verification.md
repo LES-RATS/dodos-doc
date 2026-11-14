@@ -52,7 +52,7 @@ The method is drawn from experience reports of 2026: the rewrite of the Copilot 
 
 The kernel is written from an executable model. The order for the kernel is never reversed: specification, model, oracle, implementation.
 
-- **The executable model** is the artefact of the contract lane: re-read by the two humans, protected by `CODEOWNERS`, written by another family of models than the implementation. The agent that implements cannot modify it.
+- **The executable model** is the artefact of the contract lane: re-read by the two humans, protected by `CODEOWNERS`, written by Claude Fable 5.2 from the settled contract, in a session separate from the implementation (decision of the user, 14 November 2026, against the assistant's advice to keep two families). Two first versions, by Gemini 4 Hydrogen and Mistral Large 4, serve only to find the gaps of the contract and are discarded. Because the model and the kernel now come from the same family, the independent checks are: a review of the model against the contract by another family, seL4 as second oracle, and the re-reading by the two humans. The agent that implements cannot modify the model.
 - **At every PR**: a differential test of the implementation against the model, on random call sequences and on interleavings between cores.
 - **seL4 as second oracle.** seL4 stays a second oracle, used as a black box by differential fuzzing, on the common subset. The list of accepted differences is a protected file, with a ratchet. Limit: this oracle covers only the semantics on one core and sees only the surface of the ABI. The one-kernel-per-core model, the IOMMU and the fast path need their own tests.
 - **Fast path in Zig**: an equivalence test, the same corpus with and without the fast path, identical traces.
@@ -123,7 +123,9 @@ Flux (refinement types for Rust) as a proof tool is **Aligned** (retained, to be
 
 | Work | Model |
 |---|---|
-| Executable model of the kernel (the reference) | Gemini 4 Hydrogen, thinking level high |
+| First versions of the executable model, to find the gaps of the contract | Gemini 4 Hydrogen, thinking level high; a second one by another family (DeepSeek, thinking max) |
+| Executable model of the kernel (the reference) | Claude Fable 5.2, effort medium |
+| Review of the model against the contract | Gemini 4 Hydrogen, thinking level high |
 | Kernel implementation | Claude Fable 5.2, effort medium |
 | Web research and minor codebase exploration | DeepSeek, thinking max |
 | Everything else delegated | Gemini 4 Hydrogen, thinking level high |
