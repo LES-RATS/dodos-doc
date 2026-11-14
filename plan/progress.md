@@ -99,6 +99,7 @@ A box below cannot turn orange before its decision is taken and written in the [
 |---|---|---|
 | Who clears frames: the kernel, or the memory service | The memory part of the kernel interface, which is itself needed before the one-core kernel is written | The kernel does not clear them today. The memory service gives pages from one process to another without the kernel, so it must clear in any case. To decide with a measure |
 | How the root of authority survives the loss of one core's kernel | One-core kernel, for what it fixes in `abi/` and in the layout of objects (generation number in a reference, share of memory per core in the start-up information); multi-core by messages for the rest | Direction decided (D-107): the root is rebuilt from a fixed share, nothing is adopted. To design before the one-core kernel is written |
+| Nodes, cores and load (D-108, proposed) | One-core kernel, for the layout of kernel state as a node | To validate by the two humans: [kernel.md](../architecture/kernel.md#nodes-cores-and-load) |
 | Cancelling a wait | One-core kernel | Done (D-106): `thread_cancel` is in `abi/` and in the model, pull request 3 |
 
 Weeks and dates are in the [calendar](roadmap.md#calendar).

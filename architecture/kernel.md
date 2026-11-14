@@ -35,6 +35,20 @@ The kernel has its own replacement mechanism, based on versioned object formats 
 - **Hardware threads of one physical core.** In version 1: one kernel per physical core, and the second hardware thread stays idle.
 - **Prior art to cite.** Hive (SOSP 1995).
 
+### Nodes, cores and load
+
+**Proposed, 14 November 2026** (D-108), to validate by the two humans and to design before the one-core kernel is written, for what it fixes in the layout of kernel state.
+
+- **A node is the state of one per-core kernel**, held in one block of memory with a defined, versioned format: the root of its capability tree, its scheduling state, its share of physical memory. The kernel code works on the node it is given. (The kernel control block of Barrelfish/DC, cited.)
+- **A node is bound to a core at run time, not for ever.** Under low load the nodes of several cores are parked on one core that stays awake and runs them in turn, and the other cores sleep; under load each node gets its core back. Nodes still share no state and talk only by messages, parked or not, so nothing above the kernel sees the difference except in timing.
+- **This is not the shared kernel with a short lock.** That variant runs one kernel on several cores at the same time over shared state; it stays a measured comparison point, set aside by D-026 because a panic would take the whole group and a lock makes the duration of a call depend on other cores.
+- **Containment is per node.** The kernel maps only the node it is running. A panic while it runs one node does not touch the nodes parked beside it.
+- **The share of physical memory belongs to the node** and is fixed at start-up (D-107). A node that is reloaded is rebuilt from its share.
+- **A process has a home node**, the one its memory comes from. Its core group may spread to other nodes, which hold remote mappings recorded on both sides. If the home node is lost the process is lost. If another node of the group is lost the process loses the threads that ran there, which is reported to it, and continues.
+- **No node is necessary to the machine.** The supervisor and the memory service exist on at least two home nodes. A service that must survive the loss of a node does the same.
+
+Open in this proposal: the cost of running a parked node (Barrelfish/DC measures a naive time-sharing of 20 ms slices); how a survivor tells a reference to a reloaded node from an old one (a generation number); what the placement service needs from the kernel to decide.
+
 Reasons recorded for the messages-only variant: kernels that share no state and talk by messages make the failure of one kernel the failure of one node in a distributed system. A replicated log (the NrOS technique) is state shared between kernels, which is harder to make safe if a kernel dies in the middle of a write.
 
 ### Hard points
