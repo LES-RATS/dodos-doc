@@ -125,7 +125,7 @@ Flux (refinement types for Rust) as a proof tool is **Aligned** (retained, to be
 |---|---|
 | First versions of the executable model, to find the gaps of the contract | Gemini 4 Hydrogen, thinking level high; a second one by another family (DeepSeek, thinking max) |
 | Executable model of the kernel (the reference) | Claude Fable 5.2, effort medium |
-| Review of the model against the contract | Three independent reviews, each time: Gemini 4 Hydrogen (high), Mistral Large 4 (high, with the attacker's angle) and DeepSeek (max). Claude checks every finding before the contract or the model changes: a reviewer can be wrong too (D-104) |
+| Review of the model against the contract | Four independent reviews, each time: Gemini 4 Hydrogen (high), Gemini 4 Argon (high, a separate quota), Mistral Large 4 (high, with the attacker's angle) and DeepSeek (high). Each reviewer gets its own angle. Claude checks every finding before the contract or the model changes: a reviewer can be wrong too (D-104) |
 | Kernel implementation | Claude Fable 5.2, effort medium |
 | Web research and minor codebase exploration | DeepSeek, thinking max |
 | Everything else delegated | Gemini 4 Hydrogen, thinking level high |
