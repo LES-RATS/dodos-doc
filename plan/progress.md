@@ -91,4 +91,14 @@ flowchart TD
 | Package manifest contract | | Not started |
 | Trials of weeks 1-2 | | Not started |
 
+## Decisions that block a step
+
+A box below cannot turn orange before its decision is taken and written in the [decision log](../decisions/README.md). The agent that starts the step checks this table first.
+
+| Decision to take | Blocks | Notes |
+|---|---|---|
+| Who clears frames: the kernel, or the memory service | The memory part of the kernel interface, and the memory service | The kernel does not clear them today. The memory service gives pages from one process to another without the kernel, so it must clear in any case. To decide with a measure |
+| How the root of authority survives the loss of one core's kernel | Multi-core by messages | The start-up untyped capabilities never leave the start-up space of one kernel (D-103). Barrelfish/DC keeps the root of the capability tree in an object another kernel can adopt, but states that it does not consider fault tolerance |
+| Cancelling a wait | One-core kernel | To add to the call reference and to the model before the kernel is written |
+
 Weeks and dates are in the [calendar](roadmap.md#calendar).
