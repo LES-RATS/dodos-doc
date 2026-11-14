@@ -64,7 +64,7 @@ Faults are not calls. A page fault, an illegal instruction or a budget overrun b
 
 ## Call reference, one core
 
-**Decided, 14 November 2026** (D-099): settled by the assistant at the user's request, from the gaps that two independent first models reported (27 by Gemini 4 Hydrogen, 29 by Mistral Large 4); re-read by the two humans. Revised the same day (D-100) after the reference model written from it showed six mistakes. It covers the calls of the one-core model: capabilities, object creation, threads, IPC and notifications. The other groups are specified when their model is written. The points marked **(design choice)** are the ones where another answer was reasonable.
+**Decided, 14 November 2026** (D-099): settled by the assistant at the user's request, from the gaps that two independent first models reported (27 by Gemini 4 Hydrogen, 29 by Mistral Large 4); re-read by the two humans. Revised twice the same day (D-100, D-101) after the reference model written from it showed mistakes; the rule against cycles was wrong twice before its present form. It covers the calls of the one-core model: capabilities, object creation, threads, IPC and notifications. The other groups are specified when their model is written. The points marked **(design choice)** are the ones where another answer was reasonable.
 
 ### Slots and addresses
 
@@ -82,11 +82,15 @@ Faults are not calls. A page fault, an illegal instruction or a budget overrun b
 - **A capability never outlives the capability it was derived from.** `cap_revoke` removes all the descendants of a capability and keeps the capability. `cap_delete` removes the descendants, then the capability. **(design choice: the alternative, as in seL4, hands the children to the grandparent)**
 - **An object lives exactly as long as the capability that `untyped_retype` returned for it** (its root capability), wherever that capability has been moved. There is no reference count. When the root capability is removed the object is destroyed and its memory goes back to the untyped it came from.
 - `cap_move` moves a capability to an empty slot. Its place in the tree, its rights and its badge do not change.
-- **The tree is at most 64 deep** (provisional). A derivation or a creation that would go deeper is `invalid`.
-- **A capability cannot be moved into a capability space that descends from it** (`invalid`). Otherwise a capability space could hold the capability its own memory depends on, and its removal would never end. The check walks up from the root capability of the destination space, at most 64 steps. It applies to `cap_move` and to a capability moved by IPC.
+- **The tree is at most 64 deep** (provisional): a start-up capability is at depth 1, and a derivation or a creation that would go deeper is `invalid` (checked with the plain arguments). The limit bounds the walk that finds the next capability to remove.
+- **A capability space holds authority only over what is younger than itself (design choice).** Every capability has a creation number, which only grows. An `untyped` capability, or the root capability of another capability space, can be moved into a capability space only if it was created after the root capability of that space (`invalid` otherwise, checked with the plain arguments). The check is one comparison. It applies to `cap_move` and to a capability moved by IPC; for IPC the destination is known only at delivery, so a refusal there drops the capabilities. A new capability, made by `cap_derive` or `untyped_retype`, is always younger and can be placed anywhere.
+  - Why: removing a capability removes first what was derived from it and, for the root of a space, what the space holds. Along both relations the creation number now strictly grows, so no capability can depend on itself and removal cannot loop. The earlier rule ("not into a space that descends from it") missed two spaces that hold each other's root.
+  - Consequence: to hand memory to a space that already exists, its creator makes a new child `untyped` and hands that; it keeps the parent, and with it the right to take everything back. A space cannot hold the untyped its own memory came from.
+  - A space may hold its own root capability, as the start-up space does; it is removed last. The start-up space was created from no untyped: its size is fixed by the boot image and it never grows.
 - A derived capability has a subset of its parent's rights. A capability made by `untyped_retype` does not: it gets the rights of its kind, whatever the rights of the untyped.
 - Removal runs in bounded steps: at most 32 capabilities are removed or threads woken per call (provisional), and the call returns `again` while work remains. The order is fixed: the most recently derived child first, and a capability only after all its descendants. Between two steps the tree is well formed.
-- **Removal always ends.** From the first step of `cap_delete`, the capability is dying: any other use of it returns `gone`. An object whose root capability is dying takes no new waiting thread: a call that would wait on it returns `gone`. So its queues only shrink.
+- **Removal ends.** A capability under `cap_delete` is dying from the first step: any other use of it returns `gone`. An object is dying from the first step of its destruction: every call on it returns `gone`, so its queues only shrink. A dying capability space can be reached only by repeating the `cap_delete` that started, or by a thread that still runs in it. With a reply object that is dying, `recv` returns `gone` to the receiver and a queued caller stays queued.
+- One limit is accepted: while `cap_revoke` runs, threads that hold capabilities under it can still derive new ones. Each call removes 32 capabilities against at most one new capability per competing call, and a supervisor that wants a certain end suspends those threads first.
 - Destroying an object wakes every thread that waits on it, with `gone`. This includes the thread that waits to receive with a reply object, and the caller that waits for an answer through it. A caller is not woken when the server thread alone is destroyed: the reply object is the handle, and another thread can still answer through it. Destroying a `cspace` first removes every capability in it, in index order, by the same steps. A thread whose capability space is destroyed gets `gone` from every call.
 - **Rights are checked when a call is made.** A thread that already waits is not disturbed when the capability it used is revoked; it is woken with `gone` only when the object itself is destroyed. **(design choice: waking it would need an unbounded search of the wait queues)**
 
@@ -113,7 +117,7 @@ Every call checks in this order and returns the first failure:
 
 Rules of `untyped_retype`:
 
-- Memory is taken at a watermark that only moves up. Object sizes are powers of two; the watermark is aligned on the size of the object, or on 4 KB if the object is larger, and on the page size for a frame. The watermark returns to zero when the last object taken from the untyped is destroyed.
+- Memory is taken at a watermark that only moves up. Object sizes are powers of two. The watermark is aligned on the size of a child `untyped`, on the page size for a frame, and for the other objects on their size, or on 4 KB if they are larger.
 - The new capability has every right, with one exception: it has `exec` only if the untyped capability has `exec`, and never on device memory. This is how the right to make executable frames stays with the compile service.
 - The kernel clears the memory of kernel objects. It does not clear frames: the holder of an untyped already has authority over that memory, and the memory service clears pages before it hands them out. **(design choice)**
 
@@ -155,7 +159,7 @@ This fixes the details of the [capability transfer](#capability-transfer) descri
 - **Checked when the call is made**, as in [Order of checks](#order-of-checks): each listed slot, `derive` on each capability to derive, and `grant` on the endpoint or reply object. A failure returns an error and sends nothing.
 - **Checked again at delivery**, against what the listed slots hold at that moment: the same checks as when the call was made, and the first slots of the receiver's range are empty, one per capability. The kernel does not remember which capability was in a slot while the caller waited; a thread that shares its capability space answers for it. If not, no capability moves, the words are still delivered, and the header the receiver sees has the flag `caps_dropped` and a capability count of 0.
 - The sender learns it: `send` returns the flag at once; for `call`, the kernel sets the flag in the header of the reply. The flag in a reply header therefore means that the capabilities of the request or of the reply were dropped. A server that answers with `reply_recv` is not told that the capabilities of its reply were dropped.
-- A slot listed twice in one message is `invalid`.
+- A slot listed twice in one message is `invalid`. This, and the depth of a capability to derive, are checked with the slot, before the next listed slot.
 - The receive range (first slot address and count, at most 4) is given with `call`, `recv` and `reply_recv`. An empty range refuses every capability, and its address is not looked at.
 
 ### Notifications
@@ -430,6 +434,9 @@ The Zig part is the architecture layer plus the fast path, so it is rewritten fo
 
 - Message words in registers once APX is available (see [kernel.md](kernel.md#hardware-features)).
 - Whether a slot number is stable across a suspend.
+- The creation number adds 8 bytes to a capability slot; the slot size (32 bytes) is to recompute.
+- Creation numbers between the kernels of several cores: one order is needed (a clock carried by the messages between kernels).
+- Whether "only younger authority" is too strict for a supervisor that is replaced by a new one: the new space cannot hold the roots of older spaces.
 - The step bound of removal (32) and the segment size of a `cspace` (128 slots), to fix by measurement.
 - The cost of a fault handled by the memory service, to measure against a fault handled in the kernel (see [Memory outside the kernel](#memory-outside-the-kernel)).
 - Copy on write in the memory service: in version 1, or with the snapshot work.
