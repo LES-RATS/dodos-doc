@@ -9,5 +9,6 @@ Working drafts written by agents, kept here so that they are not lost. They are 
 | `ownership-alternatives.md` | Not integrated. Survey and the write gate (D-115) |
 | `heterogeneous-cores.md` | Not integrated. Cores described by numbers, kinds, feature masks (D-115) |
 | `symmetric-nodes-recovery.md` | Not integrated. Roles instead of privileged nodes, the cores group, recovery order (D-115). Its "unfenced core" weakness is rejected by the owner (D-116) |
+| `debug-ioports-gaps.md` | Not integrated. Debugging (trace rings, crash record, console, debugger stub), `ioports`, and the gaps found in the contract (15 November 2026) |
 
 They are integrated together, after pass 11 of the reference model.
