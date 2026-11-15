@@ -96,3 +96,7 @@ The full list is in [research/verification-status.md](research/verification-stat
 - Documentation is written in English (Decided, 14 November 2026; see [thesis.md](thesis.md)).
 - `archive/` and `reviews/` are records. They are not edited.
 - A documentation change follows the maintenance lane of the [development workflow](plan/verification.md#development-workflow). A change to a contract (kernel, `os:core`, package format, security model) follows the contract lane.
+
+## Licence
+
+The documentation is under the Creative Commons Attribution-ShareAlike 4.0 International licence ([LICENSE](LICENSE)). The code examples it contains are under the Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), so that they can be copied into an application. The licences of the code are in [thesis.md](thesis.md#licence).
