@@ -10,5 +10,6 @@ Working drafts written by agents, kept here so that they are not lost. They are 
 | `heterogeneous-cores.md` | Not integrated. Cores described by numbers, kinds, feature masks (D-115) |
 | `symmetric-nodes-recovery.md` | Not integrated. Roles instead of privileged nodes, the cores group, recovery order (D-115). Its "unfenced core" weakness is rejected by the owner (D-116) |
 | `debug-ioports-gaps.md` | Not integrated. Debugging (trace rings, crash record, console, debugger stub), `ioports`, and the gaps found in the contract (15 November 2026) |
+| `fencing-without-cooperation.md` | Not integrated, not decided. Five families of answers to D-116 (stopping a core without its cooperation), with costs and sources; recommends a thin monitor under every node (15 November 2026) |
 
 They are integrated together, after pass 11 of the reference model.
