@@ -1231,7 +1231,7 @@ Provisional, to measure; the boot image states the times in `BootMembership`, an
 
 #### What the kernel keeps for debugging
 
-- **The debug area of a node.** Each node has a debug area of 17 pages of 4 KB (69,632 bytes; a byte size, the same whatever *P*) in kept memory. Bytes 0-4,095 hold the area's header (64 bytes) and the node's crash record (4,032 bytes). Bytes 4,096-20,479 hold the **kernel ring**: 256 entries of 64 bytes. Bytes 20,480-69,631 hold the **user ring**: 768 entries of 64 bytes. Only the kernel that runs the node writes its area; every kernel maps every debug area read-only, and its own node's area writable.
+- **The debug area of a node.** Each node has a debug area of 69,632 bytes (seventeen blocks of 4,096 bytes, a byte size that does not change with *P*) in kept memory. Bytes 0-4,095 hold the area's header (64 bytes) and the node's crash record (4,032 bytes). Bytes 4,096-20,479 hold the **kernel ring**: 256 entries of 64 bytes. Bytes 20,480-69,631 hold the **user ring**: 768 entries of 64 bytes. Only the kernel that runs the node writes its area; every kernel maps every debug area read-only, and its own node's area writable.
 - **The crash area.** The debug areas of all nodes sit in one **crash area**: a header of 4,096 bytes, then the debug area of node *i* at offset 4,096 + *i* × 69,632; it starts on a chunk boundary and its length is rounded up to a chunk. It is kept memory, in no untyped, never cleared during the boot. The loader keeps two crash areas, A and B: one is the area of this boot; the other holds what the previous boot wrote and is kept untouched for the whole boot ([The crash record](#the-crash-record)).
 - **Why kept memory and not a frame given by user space (design choice).** The kernel must trace before any process exists, and the record must be readable after the node that wrote it is dead and after the machine restarts. A frame of a node's memory dies with the node; a frame given by user space does not exist at machine start. The cost: two areas of 68 KB per node, kept for the whole boot.
 
@@ -1368,7 +1368,7 @@ Reasons: 1 assertion of the kernel, 2 unexpected exception in kernel mode, 3 dou
 - **Hardware breakpoints and watchpoints of user threads (design choice).** They are set through `thread_write_regs` on a suspended thread, with `write` on the thread, in words of the register block that the architecture layer defines ([Register calls](#register-calls)): on x86-64, four address words (the debug address registers) and one control word. Their number is published in the start-up page (entry `Debug`). An address word must lie in the user range (`invalid`, judged word by word with the block); a control word with a bit outside the architecture's user mask (in `abi/`) is `invalid`, so a thread can never watch a kernel address or an I/O port. A hit is a fault of kind 9, *hardware breakpoint*, delivered like every fault, with word 3 the bits of the breakpoints and watchpoints that hit and word 4 the architecture's status word (x86-64: DR6). The kernel saves and restores a thread's debug registers only when its control word enables one, so a thread that is not debugged pays nothing. Why in every build: it gives a holder of `write` on a thread nothing it could not already do by writing the thread's code and registers. The alternative, breakpoint instructions only, gives a user debugger no watchpoint on data.
 - **Single step** stays the architecture's (x86-64: TF is in the user mask of rflags); a breakpoint instruction or a single step is a fault of kind 5, as before.
 
-#### Architectures
+#### Debugging on each architecture
 
 The same on every architecture: the debug areas, the rings and their entries, the codes, the rate limit, the records and their handover, the console messages, the two builds, the calls. The architecture layer fixes: the detail words of the crash record; the console devices it supports; the signal that stops a core for the stub and for the fence; the debug registers of user threads and of the stub; the warm reset; the hardware error records of code 7; and single stepping (on RISC-V there is none, and a debugger places a breakpoint at the next instruction).
 
@@ -1416,7 +1416,7 @@ The tables above fix the arguments and results of each call. Which register or w
 
 ### Values to add to `abi/`
 
-`abi/` is the reference for values; these are the values the D-110 groups need. Nothing is removed.
+`abi/` is the reference for values; these are the values the D-110 groups need. Nothing is removed. **The values that the contract of 16 November 2026 adds or changes, and those of this list that it replaces (the sizes and addresses that assumed a page of 4 KB, `SHARE_ALIGN`, `StartCore`, `StartNode`, `StartMemory`, `StartModule`), are in [abi-changes.md](../research/drafts/abi-changes.md).**
 
 - **Calls.** `IrqClaim = 46`, `SchedRead = 47`. `TaskCreate` (35) is renamed `TaskExempt`, at the same place. `ThreadConfigure` gains its fifth argument, the message page.
 - **Object kinds.** `Vcpu = 16` (reserved), `IrqControl = 17`, `Iommu = 18`.
