@@ -127,6 +127,48 @@ Further rules:
 - Check: the deterministic simulation kills a kernel at random at every merge and verifies that the rest survives. A gate is to be set: the recovery time of a core (see [gates](../plan/gates.md#overhead-gates)).
 - Prior art (web search of 14 November 2026, abstracts only): Barrelfish/DC replaces the kernel of a core at run time, with no failure evaluation found; Quest-V recovers after a failure but isolates its kernels by virtualisation; Kmorph (Linux, out of tree) keeps a spare kernel that takes over the machine in about one second. Hive (SOSP 1995) is to be cited. Recovery was recorded as a candidate research axis to claim, with a strong argument on the server side, to be verified; it is now part of [research axis 2](../research/prior-art.md#kernel-research-axes) (**Decided**, 14 November 2026).
 
+### The write gate: mechanisms
+
+**Proposed, 16 November 2026 (D-117 point 2, D-120 point 1).** The contract states the gate as rules that name no mechanism ([The gate over page tables](kernel-interface.md#the-gate-over-page-tables), rules G1 to G14). These are the first mechanisms to prototype on each architecture, from the research draft [gate-page-tables.md](../research/drafts/gate-page-tables.md), where every figure has its source. **No measure has been made on the project's machines yet**: every cost below was measured by others, on other processors.
+
+**x86-64 (the reference desktop, a Raptor Lake processor).**
+
+| Order | Mechanism | Window open while the gate writes | Cost measured elsewhere | Status |
+|---|---|---|---|---|
+| 1 | Page tables and gate pages typed as supervisor shadow-stack pages, written only by `WRSSQ`, with CET kept on. An ordinary store to them faults; reads stay ordinary | None | `WRSSQ` 9.3 cycles against 0.8 for a `MOV`, on a Tiger Lake core (CETIS, CCS 2022) | Proposed by CETIS for kernel page tables; built by nobody. **First to prototype** (D-120) |
+| 2 | A page-table root used only by the gate, with PCID: the gate's root maps the gate pages writable, the kernel's roots map them read-only | Yes | Two writes of CR3, about 200 cycles each (Ren et al., SOSP 2019) | The fallback (D-120) |
+| 3 | Protection keys for supervisor pages (PKS) | Yes, for one key | No figure found | The reference processor's CPUID says present while Intel support said 13th-generation parts lack it: to test on the machine |
+| 4 | Toggling CR0.WP (the Nested Kernel) | Yes, for every read-only page | About 473 cycles per call on a Core i7-3770 (Nested Kernel, ASPLOS 2015) | Only on processors without CET: CR0.WP cannot be cleared while CR4.CET is set (Intel SDM §2.5, cited in the draft) |
+
+- With a window (mechanisms 2 to 4), every event that can arrive inside it (NMI, machine check, debug trap) enters through a gate stub that closes the window before any other code runs, saves the interrupted registers in a gate area, and restores them from there. Mechanism 1 has no window; the gate is then a leaf function that keeps its checked values in registers, and re-reads each entry after writing it.
+- **Instructions forbidden outside the gate and the start-up code** (the scan, rule G11): writes to CR0, CR3, CR4 and the debug registers; `WRMSR` and `XRSTORS`; `LGDT`, `LIDT`, `LLDT`, `LTR`; `INVD`; the VMX and SVM instructions (unless the image declares the hardening monitor); `IN`, `OUT` and their string forms; the shadow-stack management instructions; `ENCLS`, `PCONFIG`; any unintended `ENDBR64` pattern. `WBINVD`, `INVLPG`, `INVPCID` and `RDMSR` are allowed.
+- **Written once at start-up, then read-only:** the IDT, the GDT, the TSS, the interrupt shadow-stack table.
+- **Gate entries for privileged writes:** loading a root; the x2APIC end of interrupt and timer deadline (both non-serializing writes); interrupts to other cores (INIT, SIPI and NMI only under rule G10); port I/O; the allow-listed firmware calls (none on x86-64 in version 1: the kernel uses no firmware service at run time).
+
+**ARM64.**
+
+| Order | Mechanism | Window | Cost measured elsewhere | Status |
+|---|---|---|---|---|
+| 1 | A translation context of the gate, entered by switching `TTBR1_EL1` with its own ASID; the instruction that leaves it is the last one of a page mapped only in the gate's context (SKEE) | Yes | 284 cycles per round trip with an ASID, Exynos 7420 (SKEE, NDSS 2016) | Every Armv8.0 core. The baseline |
+| 1' | The same by widening `TCR_EL1.T1SZ` (Hilps) | Yes | 210 to 424 cycles, Juno board (Hilps, NDSS 2017) | Every Armv8.0 core; measured against 1 |
+| 2 | Permission overlays (`POR_EL1`, FEAT_S1POE) | Yes, for the table index | No figure on hardware | When present; no shipping core found |
+| 3 | Page tables typed as Guarded Control Stack pages, written by `GCSSTR` | None | No figure | When present (Armv9.3 GCS with S1PIE); no shipping core found |
+
+- **Forbidden outside the gate:** writes to `TTBR0_EL1`, `TTBR1_EL1`, `TCR_EL1`, `TCR2_EL1`, `SCTLR_EL1`, `MAIR_EL1`, `VBAR_EL1`, `POR_EL1`, `PIR_EL1`, `PIRE0_EL1`, `GCSCR_EL1`, `GCSPR_EL1` (and their EL2 forms when the kernel runs at EL2); `SMC` and `HVC`; `DC ISW`; implementation-defined system registers; the EL2 translation registers unless the image declares the hardening monitor.
+- **Firmware allow-list:** PSCI `CPU_ON` (only to a core `core_start` starts), `CPU_OFF` (own core), `AFFINITY_INFO`, `CPU_SUSPEND`, `SYSTEM_RESET2`; SDEI registration and `SDEI_EVENT_SIGNAL` (only to a core whose fence the caller drives).
+
+**RISC-V.**
+
+| Order | Mechanism | Window | Cost measured elsewhere | Status |
+|---|---|---|---|---|
+| 1 | A `satp` root used only by the gate, with its own ASID; the instruction that leaves it is the last one of a page mapped only by the gate's root | Yes | No figure found | Every core with paging. The baseline |
+| 2 | Page tables typed as shadow-stack pages (Zicfiss), written by `SSAMOSWAP` | None | No figure | When present; no silicon found |
+
+- **Forbidden outside the gate** (scanned at every 2-byte offset): writes to `satp`, `stvec`, `ssp`, the hypervisor CSRs and `senvcfg`; `ECALL`; the shadow-stack stores; `CBO.INVAL`; the hypervisor fences and loads.
+- **Firmware allow-list:** SBI `hart_start` (only to a hart `core_start` starts), `hart_stop` (own hart), `hart_get_status`, `hart_suspend`, the timer, the IPI extension, `fence_hart` (only to a hart whose fence the caller drives), `SRST`.
+
+**Measures to make before the mechanism is fixed** (gate-page-tables.md, part 9): whether the reference processor really has PKS, CET shadow stacks and IBT on both kinds of core; whether a page-table page typed as a shadow-stack page still serves the page walk and its accessed and dirty bits; the cost of a gate call and of a batch of *E* entries; the cost of CET on the null call, on IPC and on a switch of address space; the false positives of the scanner on the one-core kernel; a functional gate on ARM64 and RISC-V under QEMU, and their cycles on boards (an ARM64 board is bought when measures on ARM64 are wanted, D-120 point 4); fault injection showing that G3 to G7 stop what the check field misses; the cost of the audit of G14 on a node holding 64 GB.
+
 ### Core-by-core replacement
 
 The same path replaces the kernel core by core: a kernel update without a reboot. It relies on the versioned inter-kernel protocol and on versioned object formats.
