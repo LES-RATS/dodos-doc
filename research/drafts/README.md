@@ -11,5 +11,6 @@ Working drafts written by agents, kept here so that they are not lost. They are 
 | `symmetric-nodes-recovery.md` | Not integrated. Roles instead of privileged nodes, the cores group, recovery order (D-115). Its "unfenced core" weakness is rejected by the owner (D-116) |
 | `debug-ioports-gaps.md` | Not integrated. Debugging (trace rings, crash record, console, debugger stub), `ioports`, and the gaps found in the contract (15 November 2026) |
 | `fencing-without-cooperation.md` | Not integrated, not decided. Five families of answers to D-116 (stopping a core without its cooperation), with costs and sources; recommends a thin monitor under every node (15 November 2026) |
+| `gate-page-tables.md` | Not integrated. The write gate over the page tables (D-117): flaws of the first wording, rules G1 to G14, the mechanism on x86-64, ARM64 and RISC-V, costs, measures to make (15 November 2026) |
 
 They are integrated together, after pass 11 of the reference model.
