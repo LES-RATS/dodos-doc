@@ -14,7 +14,7 @@ The kernel knows nothing about Wasm, WIT or components. The runtime and the serv
 4. **Every call is bounded.** A long operation (revocation, deletion of a large object, clearing of memory) runs in bounded steps and returns `again`; the caller repeats the call.
 5. **A call never blocks the kernel.** The kernel has no per-thread stack. A thread that waits is a state of the thread, and the kernel returns to its scheduler.
 6. **Calls enter through the kernel-supplied code page.** Call numbers are private to that page and can change between kernel versions.
-7. **Objects belong to one core's kernel.** A call on an object held by another kernel becomes a message between kernels. The caller sees the same result, later. The machine objects (`core`, `iommu`, `role`) belong to no node: their state is in the machine table, which every kernel reads and which changes only through the write gates. Memory belongs to one node at a time: each chunk of ordinary memory and each entry of device memory has one owner, recorded in the living part of the machine table, which only the owner's write gate changes; a capability or a frame reaches another node only through a grant ([Memory and devices between nodes](#memory-and-devices-between-nodes)).
+7. **Objects belong to one core's kernel.** A call on an object held by another kernel becomes a message between kernels. The caller sees the same result, later. The machine objects (`core`, `iommu`, `role`) belong to no node: their state is in the machine table, which every kernel reads and which changes only through the write gates. Memory belongs to one node at a time: each chunk of ordinary memory and each entry of device memory has one owner, recorded in the living part of the machine table, which only the owner's write gate changes; a capability or a frame reaches another node only through a grant ([Memory and devices between nodes](#memory-and-devices-between-nodes)). Calls that change no object state (`debug_write`, `trace_emit`, `ioport_in`, `ioport_out`, `cap_inspect`) are executed by the caller's kernel, whichever kernel holds the object.
 8. **Data never crosses IPC.** IPC carries control. Data moves through shared memory objects (see [Data plane](#data-plane)).
 
 ## Objects
@@ -33,14 +33,14 @@ The kernel knows nothing about Wasm, WIT or components. The runtime and the serv
 | `timer` | A deadline with a tolerance, which signals a `notify` | Project |
 | `irq` | One vector of one core, bound to one interrupt source; an entry of the node's interrupt table | seL4 |
 | `irq_control` | The authority to claim the vectors of one node | seL4 |
-| `ioports` | A range of x86 I/O ports (architecture layer only) | seL4 |
+| `ioports` | A range of x86-64 I/O ports, carried by the capability; the kernel executes each access. One per node, made at start (architecture layer only) | seL4 |
 | `iospace` | An IOMMU domain: what a device can reach by DMA | seL4, Fuchsia BTI |
 | `iommu` | One IOMMU unit, made by the kernel at start. With `manage`, attaches devices of that unit to an `iospace`. A machine object, driven by the holder of its role | Project |
 | `memory_control` | The authority to take, give and split the blocks of memory of one node. One per node, made at start-up | Project |
 | `task` | The unit of provenance and of stopping: identifier, marks, attached threads. Stopped in one operation ([research axis 4](../research/prior-art.md#kernel-research-axes)) | Project |
 | `core` | Control of one node: start, stop, placement, status, watch; with `write`, its idle table and the right to configure and count its scheduling contexts; with `send`, the node's mailbox. A machine object ([Cores](#cores)) | Barrelfish/DC, seL4 MCS |
 | `role` | One duty with one holder at a time: an IOMMU unit, an IOAPIC, a memory reserve, a leadership. A machine object ([Roles](#roles)) | Project |
-| `debug` | Console, trace buffer, crash record | Project |
+| `debug` | The authority to write into the user trace ring of one's node. One per node, made at start. The rings and the crash records are kept memory, read through kept frames | Project |
 | `vcpu` | Reserved name and number (16), not built. It exists only if the [micro-VM fallback](drivers.md#drivers-in-micro-vms-fallback) is opened | — |
 
 Device memory (MMIO) is an `untyped` marked as device memory; it can only become a `frame` that is mapped, or a child `untyped`, never a kernel object. The registers of the interrupt controllers and of the IOMMU units, and of any other device the kernel drives itself, are in no device untyped.
@@ -49,7 +49,7 @@ The **memory object** of [memory.md](memory.md#memory-objects) (sharing, copy on
 
 ## System calls
 
-59 calls. All take capability slots and words. Every call is specified in the [Call reference](#call-reference), except those of the group not yet specified (debugging).
+63 calls. All take capability slots and words. Every call is specified in the [Call reference](#call-reference).
 
 | Group | Calls | Notes |
 |---|---|---|
@@ -62,7 +62,9 @@ The **memory object** of [memory.md](memory.md#memory-objects) (sharing, copy on
 | Interrupts and devices | `irq_claim`, `irq_bind`, `irq_ack`, `iospace_map`, `iospace_unmap`, `iospace_attach` | `iospace_attach` takes an `iommu` capability and a device identifier |
 | Tasks | `task_attach`, `task_mark`, `task_exempt`, `task_revoke`, `task_read` | A task is made by `untyped_retype`, like every object. See [Tasks and marks](#tasks-and-marks) |
 | Cores | `core_start`, `core_stop`, `core_status`, `core_idle`, `core_watch`, `core_place`, `role_claim`, `role_hand` | Replacement is `core_stop` mode seal followed by `core_start` mode resume; recovery is automatic up to the node's death, and a reload is `core_start` mode fresh ([Cores](#cores)) |
-| Debug | `debug_write`, `trace_emit` | Present in every build; the capability decides who may call them |
+| Debug | `debug_write`, `trace_emit` | Present in every build; the capability decides who may call them. The debugger stub exists only in development images ([Debugging](#debugging-call-reference)) |
+| I/O ports (x86-64) | `ioport_in`, `ioport_out`, `ioports_issue` | `unsupported` on the other architectures |
+| Entropy | `entropy_read` | No capability ([Entropy](#entropy)) |
 
 Faults are not calls. A page fault, another processor exception, a system call made outside the code page, a thread with no address space and a thread that lost its scheduling context each become a message on the thread's fault endpoint; the handler answers through the `reply` object. The message, its delivery and the answer are specified in [Faults](#faults).
 
@@ -70,7 +72,7 @@ Faults are not calls. A page fault, another processor exception, a system call m
 
 **Decided, 14 November 2026** (D-099): settled by the assistant at the user's request, from the gaps that two independent first models reported (27 by Gemini 4 Hydrogen, 29 by Mistral Large 4); re-read by the two humans. Revised twice the same day (D-100, D-101) after the reference model written from it showed mistakes; the rule against cycles was wrong twice before its present form. It covers the calls of the one-core model: capabilities, object creation, threads (configuration, resumption, suspension, cancellation), IPC and notifications, in the subsections from [Slots and addresses](#slots-and-addresses) to [Notifications](#notifications), and [Registers](#registers). The points marked **(design choice)** are the ones where another answer was reasonable.
 
-**Proposed (D-110), 14 November 2026: written, no reference model yet, not reviewed.** The subsections [Memory and devices](#memory-and-devices), [Threads: bindings, faults and registers](#threads-bindings-faults-and-registers), [Scheduling and time](#scheduling-and-time), [Interrupts](#interrupts), [Tasks and marks](#tasks-and-marks), and the section [Start-up state](#start-up-state). They were drafted as three independent groups and merged by the assistant. The merge changed some rules of the decided subsections; each such sentence carries "(D-110)" where it stands, and the reference model of those subsections needs a new pass. The points that belong to the two humans are gathered in [Points for the two owners](#points-for-the-two-owners): the contract states the recommended rule until they decide. Groups still not specified: cores, debugging, `ioports`.
+**Proposed (D-110), 14 November 2026: written, no reference model yet, not reviewed.** The subsections [Memory and devices](#memory-and-devices), [Threads: bindings, faults and registers](#threads-bindings-faults-and-registers), [Scheduling and time](#scheduling-and-time), [Interrupts](#interrupts), [Tasks and marks](#tasks-and-marks), and the section [Start-up state](#start-up-state). They were drafted as three independent groups and merged by the assistant. The merge changed some rules of the decided subsections; each such sentence carries "(D-110)" where it stands, and the reference model of those subsections needs a new pass. The points that belong to the two humans are gathered in [Points for the two owners](#points-for-the-two-owners): the contract states the recommended rule until they decide. Groups not specified at that date: cores, debugging, `ioports`; they are specified since 16 November 2026 ([Cores](#cores), [Debugging](#debugging-call-reference), [I/O ports](#io-ports)).
 
 **Revised, 16 November 2026: written, no reference model of the changes yet, not reviewed.** The 23 problems that pass 11 of the reference model found in this text are settled by the assistant's rulings of 16 November 2026; each changed sentence keeps its place. The page size became a value of the machine (D-121), through the whole file.
 
@@ -122,14 +124,17 @@ Faults are not calls. A page fault, another processor exception, a system call m
 - Destroying an object wakes every thread that waits on it, with `gone`. This includes the thread that waits to receive with a reply object, and the caller that waits for an answer through it. A caller is not woken when the server thread alone is destroyed: the reply object is the handle, and another thread can still answer through it. Destroying a `cspace` first removes every capability in it, in index order, by the same steps; the dying space keeps the index where the sweep stands, and a slot examined once is not examined again. `cap_revoke` on the root capability of a space does not sweep the space: it removes only what was derived from the root. A thread whose capability space is dying gets `gone` from every call except `cap_delete`; once the space is destroyed, the thread is bound to no space and gets `gone` from every call (D-110).
 - **What else destruction undoes (D-110).** After the waiting threads are woken (and, for a `cspace`, after its sweep), and before the root capability is removed, the kernel undoes each link to the object, most recently made first, one unit of the 32 of a step each: the threads bound to a `cspace`, an `aspace`, an endpoint (as their fault endpoint) or a `task` are unbound (a `sched` loses its one home in the first step of its removal); the records that name an `aspace` or an `iospace` are emptied; the devices of an `iospace` are detached; the lends of a `sched` are cleared; the armed timers of a `notify` are disarmed, then its bound `irq` entries are unbound. The order inside each object, and the cases of `irq_control` and `iommu`, are given in the groups below. Removing a frame capability with a full record undoes its mapping, or the message page binding it holds, in the same unit as the capability.
 - **Rights are checked when a call is made.** A thread that already waits is not disturbed when the capability it used is revoked; it is woken with `gone` only when the object itself is destroyed. **(design choice: waking it would need an unbounded search of the wait queues)**
+- **A bound endpoint and notify.** When an endpoint or a notify bound by `notify_bind` is destroyed, the binding is undone first among the links of "What else destruction undoes", after the waiting threads are woken: one unit of the 32 of a step. The other object becomes unbound. A pending word stays in the notify. The threads waiting to receive on a surviving endpoint are not woken: they wait for callers, as on any endpoint without a notify.
+- **A thread.** When the root capability of a thread is the next to remove, the kernel undoes, one unit each, in this order: its wait, if it waits (it leaves its queue, or its proxy's wait is ended on the other node; a reply object attached to it or armed with it becomes idle, as for `thread_cancel`); the lend whose receiver it is, if any; then its bindings: message page (the frame capability's record is emptied), fault endpoint, address space, capability space, task, and home context (the context keeps its lends). At most 8 units. A step with units left returns `again` and goes on at the next call. Then the root capability is removed.
+- **The rights of a kind.** "Every right" of a new object ([rules of `untyped_retype`](#capabilities-and-objects)) and "every right of its kind" (start-up) mean the eight rights of [Rights](#rights), for every kind, with these exceptions: a root made by `untyped_retype` has `exec` only by the rule of that call; a root made at start-up from no untyped, and a root of a machine object, has every right except `exec` (the `memory_control` excepted, which has `exec`); a kept frame has the rights its start-up row gives. So `cap_inspect` of a root returns 0xFF or 0xFB, of a kept frame of the kept image 0x45 (`read`, `exec`, `derive`), and of another kept frame 0x41 (`read`, `derive`).
 
 ### Order of checks
 
-Before these checks, a thread bound to no capability space, or attached to a revoked task, gets `gone` from every call, and a thread whose space is dying gets `gone` from every call except `cap_delete` on its own slots (D-110). Every call checks in this order and returns the first failure:
+Before these checks, a thread bound to no capability space, or attached to a revoked task, gets `gone` from every call, and a thread whose space is dying gets `gone` from every call except `cap_delete` on its own slots (D-110). On an architecture without I/O ports, `ioport_in`, `ioport_out` and `ioports_issue` return `unsupported` right after these, before any argument is looked at. Every call checks in this order and returns the first failure:
 
 1. the capability the call acts on: its slot (`invalid` if empty or out of range, `gone` if dead), its kind (`invalid`), its rights (`denied`);
 2. the other capability arguments, in the order of the table below, with the same three checks. A destination or any other slot address is a capability argument: its `via` capability and its range are judged here, and that the slot is empty only with the state. One exception: a message header is read right after the capability the call acts on (whose rights, `grant` included, are judged first with the number of capabilities the header states), because it says how many capabilities the message lists; a header beyond the limits, with a flag bit other than `add_marks` set by the sender, with an added-marks word that has a reserved bit, or that needs a message page the thread does not have (D-110), is `invalid` before any other capability argument is looked at;
-3. the plain arguments, in the order of the table (`invalid`); for `untyped_retype` the kind is judged before the size argument: a kind that this version does not make (`ioports`, `debug` and the reserved `vcpu`) is `unsupported` there, after the rule on device memory, and a kind that is never made from an untyped (`irq`, `irq_control`, `iommu`, `memory_control`, `core`, `role`) is `invalid` (D-110); for a thread the size argument is its feature mask, judged by the rules of [The feature mask of a thread](#the-feature-mask-of-a-thread) (`invalid`, then `unsupported`); for a frame the size argument is judged in this order: the page size value (`invalid`), whether the processor supports it (`unsupported`), the memory type (`invalid` if it does not suit the kind of memory), the number of pages (`invalid`) (D-110); the depth checks (the limit of 64 and the rule on what a space holds) come last;
+3. the plain arguments, in the order of the table (`invalid`); for `untyped_retype` the kind is judged before the size argument: a kind that this version does not make (the reserved `vcpu`) is `unsupported` there, after the rule on device memory, and a kind that is never made from an untyped (`irq`, `irq_control`, `iommu`, `memory_control`, `core`, `role`, `debug`, `ioports`) is `invalid` (D-110); for a thread the size argument is its feature mask, judged by the rules of [The feature mask of a thread](#the-feature-mask-of-a-thread) (`invalid`, then `unsupported`); for a frame the size argument is judged in this order: the page size value (`invalid`), whether the processor supports it (`unsupported`), the memory type (`invalid` if it does not suit the kind of memory), the number of pages (`invalid`) (D-110); the depth checks (the limit of 64 and the rule on what a space holds) come last;
 4. the state: `busy`, `no_slot` (the destination slot is not empty), `no_memory`, `would_wait`, `budget` (only `sched_configure` returns it, and it has no other state error, D-110).
 
 A call that passes every check may still return `again`, having done a bounded step of its work (removal, clearing of memory), or, for `recv` and `reply_recv` by a thread without an own context, having recorded a fault *no context* that it could not receive ([Faults](#faults)).
@@ -138,12 +143,12 @@ A call that passes every check may still return `again`, having done a bounded s
 
 | Call | Arguments | Result | Rights and rules |
 |---|---|---|---|
-| `cap_derive` | source, destination, rights, badge | | `derive` on the source. The new rights must be a subset of the source's (`denied` otherwise, checked with the plain arguments, so after the destination); a rights word with a bit that names no right is `invalid`, here and in a message, and is judged before the subset. In both places the rights word is a plain argument: it is judged after the three checks of its slot (so a source without `derive` is `denied` whatever the word), and in a message with its slot, before the next listed slot. A badge is accepted only on an `endpoint` or a `notify` (`invalid` otherwise). A capability that already has a badge keeps it: asking for another one is `denied` (checked with the plain arguments); asking for the same one is accepted. Badge 0 means no badge |
+| `cap_derive` | source, destination, rights, badge | | `derive` on the source. The new rights must be a subset of the source's (`denied` otherwise, checked with the plain arguments, so after the destination); a rights word with a bit that names no right is `invalid`, here and in a message, and is judged before the subset. In both places the rights word is a plain argument: it is judged after the three checks of its slot (so a source without `derive` is `denied` whatever the word), and in a message with its slot, before the next listed slot. A badge is accepted only on an `endpoint` or a `notify` (`invalid` otherwise). On an `ioports` capability the new capability keeps the source's range. A capability that already has a badge keeps it: asking for another one is `denied` (checked with the plain arguments); asking for the same one is accepted. Badge 0 means no badge |
 | `cap_move` | source, destination | | No right on the capability itself |
 | `cap_delete` | slot | | No right on the capability itself. Returns `again` while descendants remain |
 | `cap_revoke` | slot | | No right on the capability itself. Returns `again` while descendants remain |
-| `cap_inspect` | slot | kind, rights, badge | No right on the capability itself |
-| `untyped_retype` | untyped, kind, size argument, destination | | `write` on the untyped. One object per call. The size argument is: bytes for a child `untyped` (a power of two, at least one page), the page size index, the memory type and the number of pages (1 to *E*) for a `frame` (D-110), the maximum number of slots for a `cspace` (at most 2^20), the feature mask for a `thread` ([Unlike cores](#unlike-cores)), and 0 for the other kinds. A size that does not fit in 64 bits is `invalid`. Device memory can only become a `frame` or a child `untyped` (`invalid` otherwise). An `irq`, an `irq_control`, an `iommu`, a `memory_control`, a `core` or a `role` is never made by this call (`invalid`, D-110). Returns `again` while it clears memory (rules below) |
+| `cap_inspect` | slot | kind, rights, badge | No right on the capability itself. For an `ioports` capability the badge is its range ([I/O ports](#io-ports)) |
+| `untyped_retype` | untyped, kind, size argument, destination | | `write` on the untyped. One object per call. The size argument is: bytes for a child `untyped` (a power of two, at least one page), the page size index, the memory type and the number of pages (1 to *E*) for a `frame` (D-110), the maximum number of slots for a `cspace` (at most 2^20), the feature mask for a `thread` ([Unlike cores](#unlike-cores)), and 0 for the other kinds. A size that does not fit in 64 bits is `invalid`. Device memory can only become a `frame` or a child `untyped` (`invalid` otherwise). An `irq`, an `irq_control`, an `iommu`, a `memory_control`, a `core`, a `role`, a `debug` or an `ioports` is never made by this call (`invalid`, D-110). Returns `again` while it clears memory (rules below) |
 | `cspace_grow` | cspace, untyped | new number of slots | `manage` on the cspace, `write` on the untyped, which must be the one the cspace was created from (`invalid`). `no_slot` when the maximum is reached |
 
 Rules of `untyped_retype`:
@@ -232,6 +237,7 @@ This fixes the details of the [capability transfer](#capability-transfer) descri
 - The **memory type** is write-back for ordinary memory (the only value accepted there). For device memory it is uncached or write-combining. It belongs to the frame and not to a mapping, so every mapping of the same physical pages has the same type. So two mappings of the same physical pages never disagree on their type, whatever a processor does with such aliases.
 - A frame on device memory never has `exec` (rules of `untyped_retype`).
 - A new frame on ordinary memory is all zero (rules of `untyped_retype`). The kernel never reads or writes a frame on device memory.
+- **A kept frame** is a frame that the kernel makes at start-up over kept memory: the modules of the kept image, the fixed and living parts of the machine table, the crash areas, the hardware feedback tables. It is ordinary memory, write-back, never cleared, made from no untyped; its root is at depth 1 in every start-up space with the rights its start-up row gives, never `write`, so no mapping of it is writable (`denied`, by the subset rule). Removing its root destroys the frame object and gives the memory back to no one: the memory stays kept until the machine restarts.
 
 #### Mapping records
 
@@ -317,7 +323,7 @@ The kernel programs the IOMMU (rule of [drivers.md](drivers.md#iommu)).
 
 - **IOMMU units.** At start the architecture layer reads the list of IOMMU units from the firmware: on x86-64, only the DRHD entries of the ACPI DMAR table (register address, PCI segment). It turns every unit on before the first process starts. By default every device is blocked: no DMA reaches memory. Each unit is driven by the holder of its unit role ([Roles](#roles)); the tables of every `iospace` are in the memory of the iospace's own node ([Devices and shared hardware](#devices-and-shared-hardware)). The memory for the units' own tables (root and context tables, 1 MB and 4 KB per unit on x86-64) is kept by the kernel at start (see [Start-up state](#start-up-state)), once, and never grows.
 - **`iommu` objects.** The kernel makes one `iommu` object per unit at start, with its root capability in the start-up space (see [Start-up state](#start-up-state)). `untyped_retype` never makes one (`invalid`). It names the unit, and with `manage` it gives the right to attach any device identifier of that unit to an `iospace`. The kernel does not check that a device belongs to the unit's scope: discovering the devices is the platform service's job. A device attached through the wrong unit stays blocked, since its own unit still blocks it.
-- **Devices the kernel uses itself** (the USB debug port, if the kernel drives it) are attached by the kernel to a domain of its own. Their identifiers are `busy` for `iospace_attach`.
+- **Devices the kernel uses itself** (a PCI function that is the stub link of a development image) are attached by the kernel to a domain of its own. Their identifiers are `busy` for `iospace_attach`.
 - **`iospace` objects.** An `iospace` is made by `untyped_retype` from ordinary memory, two pages (root table and header, 8 KB on the reference machine). Its tables come from its untyped, with the same rules as for an aspace (free list, `no_memory`). Its address width and page sizes are the ones every unit supports, published in the start-up page (on x86-64, 48 bits if every unit supports four levels, otherwise 39). An iospace serves devices of one unit at a time, at most 16 of them. Its header lists them.
 
 | Call | Arguments | Result | Rights and rules |
@@ -341,7 +347,7 @@ Rules of `iospace_attach`:
 - **An `iommu` keeps the list of the devices attached through it**, as an iospace keeps its devices: it is linked through the device entries of the iospaces' headers, most recently attached first, and costs no memory beyond those entries. Destroying an `iommu` object detaches the devices of that list in its order, one unit of the 32 of a step each; an `iommu` with no device attached is destroyed in one step. The unit stays on and blocks every device of its scope until the next start.
 - **Invalidations of the IOMMU wait for the hardware (design choice).** An unmap is not over until the unit has confirmed that no device can still use the translation. Otherwise the memory could return to its untyped while a device still writes into it. The kernel waits for the confirmation. A unit that does not confirm within 1 ms (provisional) is a hardware fault of the unit, not of a node: the holder of its role keeps the role and tries again, every change on the unit waits, and the devices behind it keep the translations they have (killing the holder would not repair the unit). The invalidations of one call, or of one removal step, are grouped into one wait before the call returns.
 - **No device-side translation caches, no device page faults, no shared process address spaces (design choice).** The kernel enables neither ATS nor PRI nor PASID. A device that caches translations itself could keep using them, and the kernel would depend on each device to invalidate them. A device sees only its iospace. The cost: no shared virtual memory between a process and a device.
-- **DMA faults are blocked and not reported (design choice).** The unit blocks the access. The kernel clears the fault record and writes it to the trace buffer. User space learns that a device is broken through the class interface (requests that do not finish), and the driver manager restarts it ([drivers.md](drivers.md#restart-of-a-driver)). Reporting to user space would need a `notify` binding and a record queue in the kernel.
+- **DMA faults are blocked and not reported (design choice).** The unit blocks the access. The holder of the unit's role clears the fault record and writes it to its kernel ring (code 2), with the rate limit of [Debugging](#debugging-call-reference). User space learns that a device is broken through the class interface (requests that do not finish), and the driver manager restarts it ([drivers.md](drivers.md#restart-of-a-driver)). Reporting to user space would need a `notify` binding and a record queue in the kernel.
 - **The caller chooses device addresses (design choice, as seL4; Zircon's `zx_bti_pin` returns addresses chosen by the kernel).** The driver, or its emulation layer for `dma_map`, places its buffers. The kernel keeps no allocator of device addresses.
 - **Bounds.** As for the calls on an aspace, plus one wait on the unit per call. `iospace_attach` writes one context entry.
 - Interrupt remapping belongs to [Interrupts](#interrupts).
@@ -393,6 +399,7 @@ A fault is not a call. The kernel turns it into a message on the thread's fault 
   | bad call | 6 | a system call instruction outside the kernel-supplied code page |
   | no address space | 7 | see [A thread and its address space](#a-thread-and-its-address-space) |
   | no context | 8 | a thread marked as having lost its scheduling context, see [The budget follows the call](#the-budget-follows-the-call) |
+  | hardware breakpoint | 9 | #DB raised by a breakpoint or watchpoint of the thread's debug registers ([Debugging a component](#debugging-a-component)); word 3 holds the bits of those that hit, word 4 DR6 |
 
   The other exceptions are not faults of the thread. #NM is the kernel's own (vector state), #DF is a bug of the kernel, and #MC is a hardware error handled by the recovery of the node. The exhaustion of a budget is not a fault ([What runs next](#what-runs-next)).
 - **The answer.** The handler answers through the reply object, as for any call.
@@ -409,10 +416,10 @@ A fault is not a call. The kernel turns it into a message on the thread's fault 
 | Call | Arguments | Result | Rights and rules |
 |---|---|---|---|
 | `thread_read_regs` | thread | the register block, then the fault record | `read`. State: `busy` if the thread is not suspended (so a thread never reads its own registers). A waiting thread can be read. The block holds the values the thread will see when it resumes, except the registers in which a call it waits in returns its result |
-| `thread_write_regs` | thread, register block | | `write`. The block must have exactly the architecture's number of words, and the words the architecture requires to be canonical addresses must be canonical (`invalid`, judged word by word in order). State: `busy` if the thread is not suspended, then `busy` if it waits: the end of its wait would overwrite registers. Bits of the flags word that user code cannot change are forced to their fixed values without an error |
+| `thread_write_regs` | thread, register block | | `write`. The block must have exactly the architecture's number of words, and the words the architecture requires to be canonical addresses must be canonical, the breakpoint address words must lie in the user range and the breakpoint control word must have no bit outside its user mask (`invalid`, judged word by word in order); the word of user interrupts other than 0 is `unsupported`, judged with that word ([User interrupts](#user-interrupts-a-placed-hook)). State: `busy` if the thread is not suspended, then `busy` if it waits: the end of its wait would overwrite registers. Bits of the flags word that user code cannot change are forced to their fixed values without an error |
 
 - **The contract fixes** that the block is a sequence of 64-bit words, at most 64, that travels as the message words of the call (result or argument), so through the caller's message page. Word 0 is the instruction pointer, word 1 the stack pointer and word 2 the flags. The block of a new thread is all zeros, except the flags at their fixed value.
-- **The architecture layer fixes** the number of words, the order of the others, which words must be canonical, and the mask of the flags. x86-64: 20 words. In order: rip, rsp, rflags, rax, rbx, rcx, rdx, rsi, rdi, rbp, r8 to r15, fs_base, gs_base. Words 0, 1, 18 and 19 must be canonical. rflags keeps CF, PF, AF, ZF, SF, TF, DF, OF, AC and ID as given (the user mask, `RFLAGS_USER_MASK`); IF and bit 1 are always 1 (the fixed value 0x202, `RFLAGS_FIXED`); every other bit is 0. So the value a thread sees is (the value given AND the user mask) OR 0x202, and a new thread has rflags 0x202. With APX the block grows by r16 to r31 (36 words, still a message).
+- **The architecture layer fixes** the number of words, the order of the others, which words must be canonical, and the mask of the flags. x86-64: 26 words. In order: rip, rsp, rflags, rax, rbx, rcx, rdx, rsi, rdi, rbp, r8 to r15, fs_base, gs_base (words 0 to 19); the four breakpoint addresses DR0 to DR3 (20 to 23) and the breakpoint control DR7 (24) ([Debugging a component](#debugging-a-component)); the word of user interrupts (25, always 0 today). Words 0, 1, 18 and 19 must be canonical. rflags keeps CF, PF, AF, ZF, SF, TF, DF, OF, AC and ID as given (the user mask, `RFLAGS_USER_MASK`); IF and bit 1 are always 1 (the fixed value 0x202, `RFLAGS_FIXED`); every other bit is 0. So the value a thread sees is (the value given AND the user mask) OR 0x202, and a new thread has rflags 0x202. With APX the block grows by r16 to r31, appended (42 words, still a message).
 - **The vector state is not in the block (design choice).** Its size and format depend on the processor and on the features the kernel enables, and the contract would have to version them. The alternative was a frame argument that receives the XSAVE image. The kernel's debugger stub reads the vector state for kernel debugging. A user-space debugger of native services gets the general registers only. The size of the vector state depends on the thread's feature mask ([Unlike cores](#unlike-cores)).
 - **The fault record.** After the block, `thread_read_regs` returns six words: word 0 holds in bits 0-31 the kind of the fault recorded in the thread (0 if none) and 0 in the other bits; words 1 to 5 are the five words of that fault ([Faults](#faults)). A fault is recorded when it is not delivered (no handler, or a fault *no context* that found no receiver with an own context), and the record is cleared when the thread is resumed (`thread_resume` on a suspended thread, or an answer to a fault that resumes it). The architecture layer keeps the block at most 58 words, so the block and the record fit in the 64 message words.
 - Both calls do constant work (at most 64 words).
@@ -1215,6 +1222,191 @@ Provisional, to measure; the boot image states the times in `BootMembership`, an
 
 **What each node keeps** for this group, in its node block or its beacons, all fixed at start: its member word's last value seen, its core binding, its four watch slots, its idle table, its recovery reserve, its 8 observations, its `acked` array and `maps_of` bitmap, the list heads of its threads waiting for each node, and its write gate.
 
+### Debugging (call reference)
+
+**Proposed, 16 November 2026: written, no reference model yet, not reviewed.** It covers the `debug` object, the calls `debug_write` and `trace_emit`, the trace rings, what the kernel traces, the crash record and how it reaches the next boot, the console (D-118), the two kinds of kernel build and the debugger stub, and the debugging of a component, hardware breakpoints included. The rules of the sections above apply: order of checks, dying objects, bounded calls. The section [Debugging](#debugging) keeps the decided order of the work (D-091).
+
+#### What the kernel keeps for debugging
+
+- **The debug area of a node.** Each node has a debug area of 17 pages of 4 KB (69,632 bytes; a byte size, the same whatever *P*) in kept memory. Bytes 0-4,095 hold the area's header (64 bytes) and the node's crash record (4,032 bytes). Bytes 4,096-20,479 hold the **kernel ring**: 256 entries of 64 bytes. Bytes 20,480-69,631 hold the **user ring**: 768 entries of 64 bytes. Only the kernel that runs the node writes its area; every kernel maps every debug area read-only, and its own node's area writable.
+- **The crash area.** The debug areas of all nodes sit in one **crash area**: a header of 4,096 bytes, then the debug area of node *i* at offset 4,096 + *i* × 69,632; it starts on a chunk boundary and its length is rounded up to a chunk. It is kept memory, in no untyped, never cleared during the boot. The loader keeps two crash areas, A and B: one is the area of this boot; the other holds what the previous boot wrote and is kept untouched for the whole boot ([The crash record](#the-crash-record)).
+- **Why kept memory and not a frame given by user space (design choice).** The kernel must trace before any process exists, and the record must be readable after the node that wrote it is dead and after the machine restarts. A frame of a node's memory dies with the node; a frame given by user space does not exist at machine start. The cost: two areas of 68 KB per node, kept for the whole boot.
+
+#### The trace rings
+
+An **entry** is 8 words of 64 bits:
+
+| Word | Content |
+|---|---|
+| 0 | the sequence *s*, at least 1. The entry with sequence *s* sits at index (*s* − 1) mod *N* of its ring, where *N* is the ring's number of entries. Word 0 is 0 while the entry is being written |
+| 1 | the instant, a value of the [clock](#clock) |
+| 2 | bits 0-15 the code, bits 16-31 flags (bit 16 *continued*: the text goes on in the entry with the next sequence of the same ring; the other bits 0), bits 32-63 the generation of the node that wrote it |
+| 3 | the task identifier of the thread concerned, 0 if none |
+| 4 | the effective marks of the thread concerned ([Tasks and marks](#tasks-and-marks)), 0 if none |
+| 5-7 | the payload, by code (below) |
+
+The **header** of a debug area (64 bytes): magic (u32), version (u16, 1), node index (u16), generation of the writing node (u32), reserved (u32, 0), next sequence of the kernel ring (u64), next sequence of the user ring (u64), number of kernel entries suppressed by the rate limit since machine start (u64), then 16 reserved bytes, 0.
+
+- **Writing.** The kernel writes word 0 to 0, then words 1 to 7, then word 0 to *s*, then the ring's next sequence to *s* + 1, each store ordered after the previous one. One kernel writes each area and its events are serial, so no lock is needed. When the ring is full the oldest entry is overwritten: writing never fails and never waits.
+- **Reading.** A reader reads the next sequence *n*; for each *s* from max(1, *n* − *N*) to *n* − 1 it reads word 0, copies the entry, then reads word 0 again, and keeps the entry only if both reads give *s*. A reader never stops a writer. Entries of all rings are ordered by their instant; the clock is the same on every core.
+- **Two rings (design choice).** The kernel ring receives only the kernel's own entries (codes below 16); the user ring receives only `debug_write` and `trace_emit` (codes 16 and 17). So a holder of a `debug` capability that floods its ring never evicts a DMA fault or a failure. The alternative, one ring, lets any holder erase what the kernel recorded.
+- **Across generations.** A node started fresh keeps its debug area: if the header's magic and version are right it sets the generation and goes on from the next sequences found there, otherwise it clears the area and starts at 1. It reads nothing else from the area, and it writes the crash record only for its own failure, so the record of a dead generation stays readable until the next failure of the node.
+- **How user space reads them:** through the kept frame of the current crash area, in every start-up space (`read` and `derive` only). Whoever holds it reads every node's rings and records, without a call, whether the writer is alive or not.
+
+#### What the kernel traces
+
+| Code | Event | Words 5, 6, 7 |
+|---|---|---|
+| 1 | Text of the kernel (boot steps, warnings); its wording is the implementation's | 24 bytes of UTF-8 text, zero-padded |
+| 2 | A fault recorded by an IOMMU unit: blocked DMA, or an interrupt refused by remapping. Written by the holder of the unit's role | word 5: the device address, or the remapping handle; word 6: requester ID (bits 0-15), PCI segment (16-31), unit index (32-47), the architecture's reason code (48-55), bit 56 write, bit 57 interrupt remapping |
+| 3 | Entries suppressed | word 5: the code suppressed; word 6: the number suppressed, 0 when a unit lost records by overflow and does not say how many; word 7: the unit index for code 2, otherwise 0 |
+| 4 | An IOMMU unit did not confirm an invalidation within `IOMMU_WAIT_NS` | word 5: unit index |
+| 5 | A fault that was not delivered and was recorded in its thread ([Faults](#faults)) | word 5: the fault kind (low 32 bits) and the architecture's exception number (high 32); word 6: word 0 of the fault; word 7: word 4 of the fault |
+| 6 | A failure of the node: the kernel found an error in itself | word 5: the reason of the crash record; word 6: the kernel's instruction pointer; word 7: the architecture's detail word 0 |
+| 7 | A hardware error that was corrected or contained | the architecture's record (x86-64: the bank, its status and its address) |
+| 8 | An interrupt on a vector that no entry claims, or a spurious one | word 5: the vector; word 6: arrivals since the last entry for this vector |
+| 9 | A transition of a member word or a role word made by this node ([Cores](#cores)) | word 5: the node or the role; word 6: the new word; word 7: 0 for a member word, 1 for a role word |
+| 10 | An ownership word that failed its check ([Chunks, floors and the ownership words](#chunks-floors-and-the-ownership-words)) | word 5: the chunk's index, or the device entry's index with bit 63 set; word 6: the word read |
+| 16 | Text of `debug_write` (user ring) | 24 bytes of text |
+| 17 | `trace_emit` (user ring) | the three words given |
+
+- **Rate limit of the kernel ring (design choice).** Each code except 6 may write at most 16 entries per window of 1 ms of its node. A window opens at the first entry of that code when the previous window is at least 1 ms old. An entry over the limit is not written: it adds one to the suppressed counter of the header and to a counter for the code. The first entry of that code allowed in a new window is preceded by one entry of code 3 with that counter, which is then zeroed; this entry of code 3 is not limited. Why: a device that keeps faulting, or a supervisor that resumes a faulting thread in a loop, must not erase the rest of the ring. The counters sit in the node block, fixed at start.
+- **DMA faults are read by the holder of the unit's role**, in the unit's fault interrupt (a vector of the kernel): at most 16 fault records per interrupt, which it clears; if records remain, it masks that interrupt of the unit for 1 ms (a due event of its timer queue), then reads again. Faults stay blocked meanwhile, which is the unit's job. Records lost by overflow of the unit are reported by code 3 with number 0.
+- **The kernel never traces on the fast path.** `call`, `reply_recv`, `signal`, an interrupt that is signalled and a fault that is delivered write no entry.
+
+#### The `debug` object
+
+- Each node has one `debug` object, made at the node's start-up from no untyped (rule 3). Its root capability is in slot 5 of the node's start-up space, at depth 1. `untyped_retype` never makes one (`invalid`). It holds no state: it is the authority to write into the user ring.
+- Its root can be deleted like the root of any object made at start-up: the object is then destroyed and gives its memory back to no one. Nothing waits on it and nothing is linked to it, so the destruction undoes nothing. The kernel ring is not part of the object.
+
+| Call | Arguments | Result | Rights and rules |
+|---|---|---|---|
+| `debug_write` | debug, length, text | | `write` on the debug. The text is the first ⌈length / 8⌉ message words of the call, byte *k* being byte *k* mod 8 (little-endian) of word *k* div 8. Length at most 512 (`invalid`). Then, if the text needs words of the message page and the thread has none, `invalid`. No state error |
+| `trace_emit` | debug, word 0, word 1, word 2 | | `write` on the debug. Any three words. No other check |
+
+- **Effect of `debug_write`.** With length 0, nothing is written and the call succeeds. Otherwise ⌈length / 24⌉ entries of code 16 are written into the user ring of the caller's node, with consecutive sequences, each holding the next 24 bytes, the last one zero-padded; every entry but the last has the flag *continued*. Word 3 is the caller's task identifier, word 4 its effective marks. The kernel does not check that the text is UTF-8.
+- **Effect of `trace_emit`.** One entry of code 17, with the three words, the caller's task identifier and effective marks.
+- **The ring of the caller's node, whatever node holds the `debug` object (design choice).** These calls change no state of the object, so they send no message between kernels: the capability is checked as for any call (slot, kind, rights, dying, a remote capability's grant), and the caller's kernel writes its own area. So the order of a node's entries is the order of its events, and no kernel writes another node's memory. The alternative, rule 7 applied literally, costs a message per entry.
+- **The marks are stamped on each entry.** A ring is a channel from any holder to every reader, like a message; a reader that keeps or forwards entries (the log service) treats them by their marks. Writing an entry marks nobody, since nothing is received.
+- `debug_write` and `trace_emit` never wait, never return `would_wait` or `again`, and write at most 22 entries and one entry. A thread whose task is revoked, or whose space is dying, gets `gone` first, as from every call.
+
+#### The crash record
+
+**The node record** is at offset 64 of the node's debug area (4,032 bytes):
+
+| Offset | Content |
+|---|---|
+| 64 | commit (u64): the boot identifier of the crash area when the record is complete, 0 while it is written |
+| 72 | generation (u32), reason (u32) |
+| 80 | instant (u64) |
+| 88 | the node's member word as last seen (u64) |
+| 96 | 32 words of detail, whose layout the architecture layer fixes (x86-64: vector, error code, the instruction and stack pointers, flags, the faulting address, the root of translation, the general registers, the machine-check global status, and the bank, status, address and miscellaneous word of the first bank with a valid error; the rest 0) |
+| 352 | 128 bytes of UTF-8 text, zero-padded |
+| 480 | a copy of the last 32 entries of the kernel ring at the time of the record |
+| 2,528 | a copy of the last 16 entries of the user ring |
+| 3,552 | reserved, 0, to the end of the record |
+
+Reasons: 1 assertion of the kernel, 2 unexpected exception in kernel mode, 3 double fault, 4 uncorrected hardware error, 5 stopped by a fence, 6 an IOMMU unit that does not confirm, 7 containment violated, 8 start-up refused.
+
+- **Who writes it:** the kernel of the node, when it finds a failure in itself, before it writes `panic` in its node beacon and parks; and the node's handler of the fence signal (reason 5), within `NMI_GRACE_NS`, only if the record does not already hold a committed record of the same generation. The writer sets commit to 0, writes the rest, then writes commit last. A reader accepts a record whose commit equals the boot identifier in the header of its crash area. A record from a kernel that went wrong may hold anything: it is data, never trusted.
+- **The machine record.** The header of the crash area holds: magic (u64), version (u32, 1), number of nodes (u32), boot identifier (u64), sequence (u64), bytes per debug area (u32), build (u32: 0 production, 1 development), 8 reserved bytes, then the **stop record**: commit (u64), node (u32), reason (u32), instant (u64), 128 bytes of text; the rest is reserved, 0. The kernel that stops the whole machine (a containment violation, or a start-up it refuses) writes the stop record before it restarts the machine.
+- **The boot identifier** is 64 bits drawn from the kernel's generator at machine start-up, after it has mixed in the loader's seed. It only tells the records of this boot from older ones.
+- **The restart after a complete stop** is the architecture's warm reset, which keeps the contents of memory where the machine allows it; the architecture layer names it (x86-64: the chipset's reset control register, then a triple fault if the machine still runs after 1 ms). The kernel reads no firmware table to find it (D-112). That memory survives the warm reset on the reference desktop and the Dell is to test ([Open points](#open-points)).
+
+**How the record reaches the next boot.** The loader and the kernel are one signed image, so this is part of the contract.
+
+1. The loader keeps the two crash areas at addresses recorded in one non-volatile UEFI variable (two pairs of base and length). It writes that variable only when it must place an area again: at the first boot, when the number of nodes needs a larger area, or when an address can no longer be allocated, to spare the firmware's flash.
+2. At each boot it allocates both areas at their addresses; an area that cannot be allocated is lost and placed again.
+3. The **previous** area is the one whose header has the right magic, version and the greater sequence; if neither header is valid, there is none. The **current** area is the other. The loader hands over the bases and lengths of both, and the previous sequence (0 if none).
+4. The machine start-up clears the current area, writes its header with sequence = previous sequence + 1 and a new boot identifier, and starts every debug area at sequence 1. It never writes the previous area. Both areas are kept memory for the whole boot, listed in the entry `Kept`.
+5. The previous area is given as a kept frame in every start-up space, and described by the entry `CrashRecord`. A service (the storage service, by the first service's policy) copies the records it finds valid to the raw region of the store ([storage.md](storage.md#partitions)).
+
+- **Why memory and not the disk (design choice).** The kernel has no disk driver, and its failure path must not depend on one. The alternatives are a polled disk writer in the kernel (a storage driver in the trusted base), a second crash kernel per node (a reserved image per node), or the UEFI variable store at failure time (firmware services on a failing core). Within a boot, the record of a node that died while the machine goes on is in memory anyway, and the supervisor copies it when the change of the member word is signalled.
+- **Where it is not kept.** A firmware that clears memory at reset, or a machine without a UEFI variable store, gives no previous area; the record of the current boot is then the only one, and a complete stop loses it.
+
+#### The console
+
+**D-118 point 3: the console exists only if the signed image declares one, it only outputs, and production images declare none by default.** The contract fixes what the kernel may write to it.
+
+- **The device** is named by the boot image: none (the default of a production image); a 16550 UART on I/O ports (x86-64; base port); a 16550 UART in memory (physical address, register stride 1 or 4 bytes); a PL011 (ARM64; physical address); the SBI debug console (RISC-V, the DBCN extension). The kernel uses no firmware table to find it (D-112). Its ports, or its page, are kept from user space ([I/O ports](#io-ports)); the kernel never enables its interrupts, never reads it (except the debugger stub of a development image, below) and polls its transmit status.
+- **One node drives it:** the holder of the unit role `console` ([Roles](#roles)). Every other node's messages reach it through the rings and the beacons, which the holder reads.
+- **What the kernel writes (design choice: a fixed set of numbered messages, no addresses and no memory contents).** Each message is one line of ASCII: the letters `DodOS`, a space, the letter `M` and the message number in decimal, then its fields in decimal separated by spaces, then a line feed. The kernel writes nothing else to the console: no text of `debug_write`, no text of the kernel ring, no address, no register, no memory content.
+
+| Number | Message | Fields |
+|---|---|---|
+| 1 | The kernel starts | kernel version, build (0 production, 1 development), number of nodes |
+| 2 | A node is live | node, generation |
+| 3 | A node is accused | node, generation, evidence |
+| 4 | A node is dead | node, generation |
+| 5 | A node failed (its crash record is written) | node, generation, reason of the crash record |
+| 6 | A node is unfenced | node, generation |
+| 7 | A role moved | role index, new holder |
+| 8 | The start-up is refused | reason (1 segment placement, 2 overlapping or unaligned segments, 3 writable and executable segment, 4 start-up page too large, 5 floors and reserves do not fit, 6 machine values out of range, 7 kept image hash, 8 a development option in a production image) |
+| 9 | The machine stops | node, reason of the stop record |
+| 10 | IOMMU faults were recorded | unit index, number since the previous message 10 for this unit |
+| 11 | An IOMMU unit does not confirm | unit index |
+| 12 | Hardware errors were corrected | node, number since the previous message 12 for this node |
+| 13 | A fault was recorded in a thread | node, fault kind, task identifier |
+| 14 | Kernel entries were suppressed | node, code, number |
+
+- **Pacing (design choice).** While messages wait, the console role holder has a due event every 1 ms (in its timer queue, counted among the 16 due events of an interrupt) at which it writes at most 16 bytes; that matches a 16550's transmit queue at 115,200 baud. Messages 10, 12 and 14 are written at most once per second per unit or node, with the count since the last one. Its time is kernel time of an event, charged as an interrupt is. Direct writes, without pacing, happen only during machine start-up before a second core runs, and when the machine stops.
+
+#### Two builds, and the debugger stub
+
+- **A kernel image is built either for production or for development.** Both give the same result for every call; the start-up page and the crash area header say which one runs.
+- **A production image has none of the following**, neither code nor data: the debugger stub; any reading of a device by the kernel; the use of hardware breakpoints and watchpoints by the kernel for itself; the stop of every core for the stub. A production kernel refuses to start, with a stop record of reason 8, if its boot image asks for any of them.
+- **Present in every build:** `debug_write`, `trace_emit`, the rings and their codes, the crash records and their handover, the console when the image declares one, and the hardware breakpoints of user threads ([Debugging a component](#debugging-a-component)).
+- **The debugger stub** (development images only, D-091) speaks the gdb remote protocol (packets `$data#checksum` acknowledged by `+` or `-`, and at least the commands `?`, `g`, `G`, `m`, `M`, `c` and `s`) over its own **stub link**, a device the development image declares apart from the console (it may be the same UART: the stub then owns its input, and the console keeps its output rules for its messages). **Why apart from the console (design choice):** D-118 makes the console output only and forbids it addresses and memory contents, which a debugger needs; the stub link exists only in images signed by a developer key. The stub is entered when the link receives the byte 0x03, at a kernel breakpoint or watchpoint, or at a failure of any node if the development option *stub on failure* is set. The core that enters it sends the architecture's strongest signal (as the fence does) to every core that runs a node; each saves its registers in a slot of its node kept for the stub and waits on a release word in kept memory; a core that does not stop within 10 ms is shown to gdb as running. Before the release, the stub clears every open observation of every node beacon, so that no node accuses another for the time stopped. The release word is state shared between nodes that exists only in development images.
+- **How the stub stays out of a production machine's trusted base:** the production image has no stub code; a development image is signed by a developer key, which the firmware trusts only if the user enrols it ([security.md](security.md#secure-boot)); the disk key is sealed against the system's signing key, so a development image does not unseal a production installation ([security.md](security.md#disk-key)); and the shell draws a permanent mark when the start-up page says development.
+
+#### Debugging a component
+
+- **The kernel has no object for it.** "Debugging a component is a capability" ([security.md](security.md#permissions)) is made of what exists: `read` and `write` on its threads (the register calls, `thread_suspend`, `thread_resume`), frames to map its memory, and its faults. The supervisor is the fault handler of the component's threads and forwards the faults of kinds debug and hardware breakpoint to the debugger it authorised.
+- **Hardware breakpoints and watchpoints of user threads (design choice).** They are set through `thread_write_regs` on a suspended thread, with `write` on the thread, in words of the register block that the architecture layer defines ([Register calls](#register-calls)): on x86-64, four address words (the debug address registers) and one control word. Their number is published in the start-up page (entry `Debug`). An address word must lie in the user range (`invalid`, judged word by word with the block); a control word with a bit outside the architecture's user mask (in `abi/`) is `invalid`, so a thread can never watch a kernel address or an I/O port. A hit is a fault of kind 9, *hardware breakpoint*, delivered like every fault, with word 3 the bits of the breakpoints and watchpoints that hit and word 4 the architecture's status word (x86-64: DR6). The kernel saves and restores a thread's debug registers only when its control word enables one, so a thread that is not debugged pays nothing. Why in every build: it gives a holder of `write` on a thread nothing it could not already do by writing the thread's code and registers. The alternative, breakpoint instructions only, gives a user debugger no watchpoint on data.
+- **Single step** stays the architecture's (x86-64: TF is in the user mask of rflags); a breakpoint instruction or a single step is a fault of kind 5, as before.
+
+#### Architectures
+
+The same on every architecture: the debug areas, the rings and their entries, the codes, the rate limit, the records and their handover, the console messages, the two builds, the calls. The architecture layer fixes: the detail words of the crash record; the console devices it supports; the signal that stops a core for the stub and for the fence; the debug registers of user threads and of the stub; the warm reset; the hardware error records of code 7; and single stepping (on RISC-V there is none, and a debugger places a breakpoint at the next instruction).
+
+### I/O ports
+
+**Proposed, 16 November 2026: written, no reference model yet, not reviewed.** x86-64 only. It covers the `ioports` object and the calls `ioport_in`, `ioport_out` and `ioports_issue`.
+
+- **The object.** Each node has one `ioports` object on x86-64, made at the node's start-up from no untyped. Its root capability is in slot 7 of the node's start-up space, at depth 1. On other architectures slot 7 is empty and no `ioports` object exists. `untyped_retype` never makes one (`invalid`).
+- **A capability carries a range** [*first*, *last*] of ports, 0 ≤ *first* ≤ *last* ≤ 65,535, in word 2 of its slot, where other kinds hold their badge. The root's range is [0, 65,535]. `cap_inspect` returns it as the badge: *first* in bits 0-15, *last* in bits 16-31, the other bits 0. `cap_derive` and `cap_move` keep the range; a badge other than 0 asked of `cap_derive` is `invalid`, as on every kind but `endpoint` and `notify`. Only `ioports_issue` narrows a range.
+- **Kernel ports.** Some ports are the kernel's for the whole boot: the legacy PIC (0x20-0x21 and 0xA0-0xA1), which the kernel masks, and the 8 ports of the console or of the stub link when they are a UART on I/O ports. The PCI configuration ports (0xCF8-0xCFF) and the chipset's reset control port are allowed only to the node that holds the plain role `platform` ([The gate over page tables](#the-gate-over-page-tables), G10). An access that touches a port refused to the caller's node is `busy`, whatever the capability. A range may contain such ports. They are published in the start-up page (entry `Debug`).
+
+| Call | Arguments | Result | Rights and rules |
+|---|---|---|---|
+| `ioport_in` | ioports, port, width | value | `read` |
+| `ioport_out` | ioports, port, width, value | | `write` |
+| `ioports_issue` | ioports, destination, first, last | | `derive` on the ioports |
+
+- **Checks of `ioport_in` and `ioport_out`:** on an architecture without I/O ports, `unsupported` before any argument is looked at (after the checks that come before every call); then the ioports (slot, kind, `read` or `write`; dying is `gone`); then the plain arguments, each `invalid`: the width is 1, 2 or 4; *first* ≤ port and port + width − 1 ≤ *last* (computed without overflow); for `ioport_out`, the value is below 2^(8 × width); then the state: an access that touches a port refused to the caller's node is `busy`. Effect: the gate executes one `in` or `out` of that width at that port; the value read is zero-extended. Constant work.
+- **Checks of `ioports_issue`:** `unsupported` as above; the ioports (slot, kind, `derive`); the destination; the plain arguments, each `invalid`: *first* ≤ *last* ≤ 65,535, [*first*, *last*] inside the source's range, then the depth checks; the state: `no_slot`. Effect: the new capability is a child of the source, with the source's rights and the range [*first*, *last*]. Constant work.
+- **The kernel executes each access (design choice).** The alternative is the processor's I/O permission bitmap of 8 KB, per thread (Linux) or per address space (Zircon), which adds 8 KB per thread or space and work at each switch. One call per access costs under a microsecond, against devices that are slow and rare: the ACPI registers of the platform service, the PS/2 controller, the CMOS clock, legacy serial ports, the I/O ranges of old PCI devices, and the port accesses of the Linux emulation layer. seL4 does the same.
+- **User code cannot execute `in` or `out`.** User threads run with IOPL 0, which they cannot change (IOPL is not in the user mask of rflags), and the TSS of every core has no bitmap. An `in` or `out` from user code is a fault of kind protection.
+- **No string I/O, no batch, no exclusive ranges (design choice).** No device of version 1 needs string I/O. The kernel does not check that two capabilities hold disjoint ranges: who may touch which device is the platform service's decision, and revoking the parent capability takes the ranges back. seL4 refuses to issue a port twice, which here would be state shared by every node.
+- **Several nodes.** Every node's root covers the same ports. The port calls are executed by the caller's kernel, whatever node holds the object: a port is a resource of the machine, and the call changes no object state.
+- **Destruction.** Deleting a capability removes its descendants first. Destroying the object undoes nothing and gives its memory back to no one; a device keeps the state its ports were given.
+- **ARM64 and RISC-V** have no I/O ports: the I/O space of PCI is a window of memory there, which the platform service gives a driver as a device frame. The three calls are `unsupported`, and `ioports` is the only object of the contract that exists on one architecture only ([Architectures](#architectures)).
+
+### Entropy
+
+**Proposed, 16 November 2026 (accepted by the owner).** The kernel has a random generator per node (D-057), seeded from the processor's source and from the node's seed of the start-up page, and fed with the time stamps of interrupt arrivals ([Interrupts](#interrupts)).
+
+| Call | Arguments | Result | Rights and rules |
+|---|---|---|---|
+| `entropy_read` | length, mix 0, mix 1, mix 2, mix 3 | the bytes | No capability, like `yield`. Length at most 64 (`invalid`). Then, if the result needs words of the message page and the thread has none, `invalid`. The four mix words are mixed into the node's generator first (design choice: this is how the user-space driver of the TPM feeds the kernel, as D-057 asks; mixing input into the generator cannot lower what it already holds). Then the generator fills the first ⌈length / 8⌉ message words of the result with *length* bytes, the rest of the last word 0. Never `unsupported`, never `again`, never `would_wait`. Constant work |
+
+- A thread whose task is revoked, or whose space is dying, gets `gone` first, as from every call. The call is executed by the caller's kernel.
+- The differential test does not compare the bytes: the reference model checks only the length, the errors and that the call changes no other state.
+
+### User interrupts: a placed hook
+
+**Proposed, 16 November 2026.** Processors that deliver an interrupt straight to a user thread (Intel's user interrupts and their equivalents) are not used in version 1, and no machine of the project has them to measure. The contract places the hook now, so that they can be added without changing an object size: **state feature bit 31** ([Features and vector length](#features-and-vector-length)) and **one word of the register block**, which the architecture layer places (x86-64: word 25). Today a feature mask with bit 31 is `unsupported`, and `thread_write_regs` with that word other than 0 is `unsupported`, judged with that word; `thread_read_regs` returns it as 0.
+
 ### Registers
 
 The tables above fix the arguments and results of each call. Which register or which field of the message page carries each one is defined by the architecture layer and published in the kernel-supplied code page (rule 6). It is not part of this contract.
@@ -1306,12 +1498,12 @@ A capability carries a set of rights. `cap_derive` can only remove rights.
 
 | Right | Meaning |
 |---|---|
-| `read`, `write` | Map a frame readable or writable; read or change an object's state. `write` on a `core` allows configuring scheduling contexts on it |
+| `read`, `write` | Map a frame readable or writable; read or change an object's state. `write` on a `core` allows configuring scheduling contexts on it. Execute an `in` (`read`) or an `out` (`write`) on an `ioports`; write into the user trace ring (`write` on a `debug`); set breakpoints through `thread_write_regs` (`write` on a thread) |
 | `exec` | Map a frame executable. Only the compile service receives frames with this right ([research axis 5](../research/prior-art.md#kernel-research-axes)) |
 | `send` | Call or send on an endpoint; signal a notification |
 | `recv` | Receive on an endpoint; wait on a notification |
 | `grant` | Transfer capabilities through an endpoint or a reply object |
-| `derive` | Derive further capabilities from this one |
+| `derive` | Derive further capabilities from this one; narrow a range of ports (`ioports_issue`) |
 | `manage` | Configure the object (bind, set parameters, attach to a task); claim a vector (`irq_control`); attach a device (`iommu`); make a task mark-aware (`task`) |
 
 ## Errors
@@ -1350,6 +1542,9 @@ Provisional. Sizes are fixed per kernel version and published in the start-up pa
 | `irq` | An entry of the node's interrupt table, 64 bytes per claimable vector (12 KB per node on x86-64), kept at start-up; not made from an untyped |
 | `irq_control`, `memory_control` | Kernel memory kept at start-up; not made from an untyped |
 | `core`, `iommu`, `role` | Machine objects: kept at machine start-up, never destroyed |
+| `debug`, `ioports` | No memory: made at a node's start-up, not from an untyped |
+| Kept frame | Kept memory, made at start-up |
+| Debug area | 69,632 bytes per node, in each of the two crash areas |
 | Machine table | Kept: one ownership word (8 bytes) per chunk, 16 bytes per device entry, the gate words and page classes ([The gate over page tables](#the-gate-over-page-tables)), a member word per node, a role word per role, and per node `GRANTS` grant entries of 128 bytes, `GRANTS` use entries of 32 bytes and `PROXIES_PER_PEER` proxies for each other node |
 
 ### The capability slot
@@ -1402,7 +1597,7 @@ The reference model takes the same description as input.
 - the framebuffer;
 - an entropy seed of 64 bytes;
 - the boot time stamps;
-- the crash record of the previous boot, if there is one;
+- the bases and lengths of the current and previous crash areas, and the previous sequence ([The crash record](#the-crash-record));
 - the boot image, already in memory, as a list of **modules**:
   - first, the segments of the first service, each with its virtual address, its rights and its length; the loader has already filled in the file contents and zeroed the tail;
   - then the files of the other services of the boot image;
@@ -1431,7 +1626,7 @@ A failure during these steps is a failed boot.
 
 **Memory, by rule.**
 
-1. **Kept.** The kernel keeps: its image and the slot for a replacement image (the code page included); the **kept image** (rule 2); the block of every node; the machine table, its fixed and living parts; the start-up objects of every node that are made from no untyped (the start-up `cspace`, the tables of the start-up `aspace` and its reserve, the start-up `thread`, `sched` and `task`, the mailbox endpoint, the `debug`, `ioports`, `irq_control` and `memory_control` objects); the machine objects (`core`, `iommu`, `role`); the interrupt table of every node; the interrupt remapping table; the tables of the IOMMU units; the hardware feedback tables ([Unlike cores](#unlike-cores)); the beacons of every node and core ([Beacons](#beacons-and-what-each-node-publishes)); the proxies; the clock page; on x86-64, the page below 1 MB of the park stub; the kernel's own stacks and page tables; and the register ranges of the interrupt controllers and of the IOMMU units. The kept ranges are listed in the entry `Kept`. Their size is the implementation's own, and publishing it is what lets the oracle rebuild the same state.
+1. **Kept.** The kernel keeps: its image and the slot for a replacement image (the code page included); the **kept image** (rule 2); the block of every node; the machine table, its fixed and living parts; the start-up objects of every node that are made from no untyped (the start-up `cspace`, the tables of the start-up `aspace` and its reserve, the start-up `thread`, `sched` and `task`, the mailbox endpoint, the `debug`, `ioports`, `irq_control` and `memory_control` objects); the machine objects (`core`, `iommu`, `role`); the interrupt table of every node; the interrupt remapping table; the tables of the IOMMU units; the hardware feedback tables ([Unlike cores](#unlike-cores)); the beacons of every node and core ([Beacons](#beacons-and-what-each-node-publishes)); the two crash areas, the debug area of every node included ([Debugging](#debugging-call-reference)); the proxies; the clock page; on x86-64, the page below 1 MB of the park stub; the kernel's own stacks and page tables; and the register ranges of the interrupt controllers and of the IOMMU units. The kept ranges are listed in the entry `Kept`. Their size is the implementation's own, and publishing it is what lets the oracle rebuild the same state.
 2. **The kept image (design choice).** The image region, the modules of the boot image, is kept memory: read-only for every kernel and every process, never reclaimed, common to every node, with its SHA-256 in the fixed part of the machine table. It is given once, as kept frames (rule 5), and never as an untyped. Why: every recovery needs the code of the first service, of the supervisor and of the memory service from a place that no dead node could have written. The cost: the image's size is kept for the life of the machine. The alternative, an image untyped of one node that can be retyped once the boot image is deleted, is lost with that node.
 3. **Ordinary memory.** This is the RAM that is usable after `ExitBootServices`: the UEFI types loader code and data, boot services code and data, and conventional memory. The kept ranges are taken out, and each range is shrunk inwards to page boundaries.
 4. **Chunks, floors and reserves (D-112, D-114).** Ordinary memory is cut into chunks; the parts of a range smaller than a chunk are left out. Let *n* be the number of usable cores and *O* the ordinary memory in GiB. Every node's floor is `floor_node` bytes rounded up to a chunk; the *k* reserves are `reserve_bytes + reserve_per_gib × O` bytes rounded up to a chunk ([Chunks, floors and the ownership words](#chunks-floors-and-the-ownership-words)). Floors are taken in ascending address order, node 0 first, then the reserves in order. A floor never changes (D-107). The chunks of floors are *none*; the free chunks of reserve *j* have the owner code of reserve *j*; every other chunk has the word *free*, unclaimed.
@@ -1462,7 +1657,7 @@ A failure during these steps is a failed boot.
 | 13 | the kept frame of the living part of the machine table, `read` and `derive` only |
 | 14 | the kept frame of the fixed part of the machine table, `read` and `derive` only |
 | 15 | the mailbox endpoint of this node, with `recv` ([Machine objects](#machine-objects)) |
-| 16 onwards | contiguous, in this order: one root `core` capability per node, in index order, so the capability of node *i* is in slot 16 + *i*; one root `iommu` capability per IOMMU unit, in the order of the entry `Iommu`; one root `role` capability per role, in the order of the entry `Roles`; one kept frame per package for its hardware feedback table, in the order of the entry `Feedback`, where the processor has one; then the untypeds of the node's floor by ascending address; then the frames of the writable segments of the first service, copied (below); then the kept frames of the modules, in module order, each module a run of consecutive slots |
+| 16 onwards | contiguous, in this order: one root `core` capability per node, in index order, so the capability of node *i* is in slot 16 + *i*; one root `iommu` capability per IOMMU unit, in the order of the entry `Iommu`; one root `role` capability per role, in the order of the entry `Roles`; one kept frame per package for its hardware feedback table, in the order of the entry `Feedback`, where the processor has one; then the untypeds of the node's floor by ascending address; then the frames of the writable segments of the first service, copied (below); then the kept frames of the modules, in module order, each module a run of consecutive slots; then the kept frame of the current crash area and, if there is one, the kept frame of the previous crash area, `read` and `derive` only |
 | after these | empty slots, to the end |
 
 - **Number of slots:** the multiple of 128 just at or above 16 + *n* + IOMMU units + roles + feedback frames + untypeds + copied segment frames + kept frames + 4,096. So the first service always has at least 4,096 empty slots.
@@ -1497,7 +1692,7 @@ Nothing else is mapped. Each frame capability records its mapping. The address s
 | 5 | Framebuffer | Base and size (u64 each); width, height, bytes per line, format (u32 each; 0 = 32-bit BGRx, 1 = 32-bit RGBx) |
 | 6 | EntropySeed | 64 bytes, drawn from the kernel's generator for this node after it has mixed in the loader's seed and the processor's source; each node, and each fresh start, gets its own |
 | 7 | BootTimes | Five u64: the frequency of the time stamp counter, then the counter at entry to the loader, at `ExitBootServices`, at entry to the kernel and at the first instruction of the first thread (0 if unknown), for the [boot gates](../plan/gates.md#boot-and-shutdown) |
-| 8 | CrashRecord | The bytes of the record; its format is the debugging group's |
+| 8 | CrashRecord | `StartCrash` (32 bytes): base, length and sequence of the previous crash area (u64 each), slot of its kept frame, flags (bit 0 its stop record is valid, bit 1 at least one node record is valid) (u32 each). Left out when there is no previous area |
 | 9 | Process | `StartProcess` (40 bytes): entry point, address of the message page, of the start-up page, length of the start-up page, number of slots of the space, first empty slot after the ranges |
 | 10 | Modules | `StartModule` records (40 bytes): first slot, number of slots (u32 each), virtual address (0 if not mapped), length in bytes (u64 each), flags (bit 0 mapped, bit 1 read, bit 2 write, bit 3 exec, bit 4 a first service), offset and length of its name, reserved (u32 each). The records are followed by the **name area** of the entry: the names, in UTF-8, without terminator; a name's offset is counted from the start of the name area. For a writable segment, the slots are those of its copied frames |
 | 11 | Node | `StartNode` (16 bytes): this node's index, number of nodes, generation, flags (bit 0 started fresh after a death, bit 1 resumed) (u32 each) |
@@ -1513,6 +1708,7 @@ Nothing else is mapped. Each frame capability records its mapping. The address s
 | 21 | Kinds | `StartKindRecord` records (56 bytes), one per kind of core, by kind number ([Unlike cores](#unlike-cores)) |
 | 22 | Features | For each kind, by kind number, 32 u32: the bytes of the save area of each state feature, indexed by its bit (0 if the kind does not have it) |
 | 23 | Feedback | `StartFeedback` records (16 bytes): package, slot of its kept frame, bytes, reserved (u32 each) |
+| 24 | Debug | `StartDebug` (56 bytes): build (0 production, 1 development), console kind (u32 each); console address (u64: base port, physical address, or 0); base and length of the current crash area (u64 each); slot of its kept frame, bytes per debug area (u32 each); entries of the kernel ring, of the user ring, bytes per entry, hardware breakpoints, hardware watchpoints of a user thread, reserved (u16 each); then the ports refused to this node, as pairs of first and last port (u16 each) |
 
 **Generations and references to another node (D-107, D-108).**
 
@@ -1587,9 +1783,11 @@ A gate is added: faults per megabyte read on a cold sequential read.
 **Decided, 14 November 2026.** Debugging comes before features. In order, at the very start of the kernel track:
 
 1. serial console, on QEMU and on the reference desktop;
-2. a remote debugger stub in the kernel (gdb protocol);
-3. a trace buffer per core, readable after a panic;
-4. a crash record written to the reserved area (see [storage.md](storage.md#partitions)).
+2. a remote debugger stub in the kernel (gdb protocol), in development images only;
+3. a trace ring per node, readable after a panic and after a restart;
+4. a crash record written in memory, in the crash area, which the next boot hands over; the storage service copies it to the reserved area (see [storage.md](storage.md#partitions)).
+
+The calls, the rings, the records, the console (output only, a fixed set of messages, only if the image declares one: D-118) and the stub are specified in [Debugging (call reference)](#debugging-call-reference). The serial console of item 1 is a development image's stub link, or a console the image declares.
 
 A small native shell and a few tools (list capabilities, read memory, start and stop a thread, read traces) are ported as soon as the kernel starts a first process. They are native programs, outside the Wasm runtime, and they stay in the rescue image.
 
@@ -1653,7 +1851,6 @@ The Zig part is the architecture layer plus the fast path, so it is rewritten fo
 - **The vector length on RISC-V** (D-118), to check before the rule is final: whether a RISC-V core runs correctly code made for a shorter vector length. The contract writes one length per kind and refuses to place a thread on a kind of another length; if shorter code runs correctly, a thread could also run on a kind whose length is longer than its own.
 - **The times of membership** (`STALE_NS`, `STUCK_NS`, `SWEEP_NS`, `FENCE_NS`, `SETTLE_NS`) and the recovery reserve, to measure on the reference machines: the longest firmware stall, the time of a fence per architecture, the time for posted writes to reach a device after a stop, the time to reclaim.
 - Numbers (error codes, bits of the rights, kinds, calls, layout of the header) are defined in `abi/`, which is the reference for values; this document names them.
-- The groups not yet specified: debugging (`debug_write`, `trace_emit`), and `ioports` (no call uses it yet: how it opens ports to a thread).
 - **The protocol of a core group** (D-027): how a node joins and leaves the group of a multi-node address space, and how a change of the home copy reaches the other copies. The hooks are placed (each copy an `aspace` of its node, the frames under grants, the state *waiting for another node*); the protocol needs the formal model of the change of size of a group (kernel.md) before it is written.
 - Message words in registers once APX is available (see [kernel.md](kernel.md#hardware-features)).
 - The step bound of removal (32), the segment size of a `cspace` (128 slots) and the clearing step (64 KB), to fix by measurement.
@@ -1661,5 +1858,8 @@ The Zig part is the architecture layer plus the fast path, so it is rewritten fo
 - Copy on write in the memory service: in version 1, or with the snapshot work.
 - The spread of sticky marks in practice, including the two-way rule for capabilities: how many services end up marked during normal use, measured on the injection attack suite.
 - The numbers of this draft (message words, sizes, slot counts), to fix after the one-core model.
-- User interrupts as a second wake-up path (see [kernel.md](kernel.md#hardware-features)).
+- **User interrupts** are not in version 1; the hook is placed (a feature bit and a word of the register block: [User interrupts](#user-interrupts-a-placed-hook)).
+- **Who owns the hardware watchdog** (not decided). What is known: platform.md says it is armed by the kernel; the kernel reads only the MADT and the DMAR (D-112), and the watchdog is described in other tables (the chipset's timer, the ACPI WDAT table); the hang of a node is the cores group's (heartbeats and evidence). Recommended: the platform service arms it and the service manager feeds it, so a whole-machine hang resets the machine through it. Alternative: the kernel arms it, a second exception to D-054.
+- **The debugging means on the reference desktop** (not decided, D-058). Recommended: a 16550 (the board's header or a PCIe serial card) as the stub link; the xHCI debug capability as an option. Alternative: the xHCI debug capability only; it shares the PCI function of its controller, so the development image loses the USB ports of that controller.
+- **Whether memory survives the warm reset** on the reference desktop and the Dell, which the handover of the crash record needs ([The crash record](#the-crash-record)): to test.
 - **A node on several cores** (candidate 1 against candidate 3 of [kernel.md](kernel.md#nodes-cores-and-load)). Not decided: the contract keeps one node per core as written, and the measured trial decides (D-111, D-116 point 2).
