@@ -59,7 +59,7 @@ Principle: shutdown and crash follow the same path ("crash-only" software, Cande
 | A component or a service falls | Restart as above. A service reloads its state from storage; an application has the state it saved through `suspend` |
 | Power cut | Blobs are immutable and consistency comes from the SQLite journal (see [storage.md](storage.md#on-disk-format)), so there is no disk check at reboot. Modifiable objects are versioned. The periodic snapshot of processes, which would bound the loss to a few seconds of input (interval to set), is deferred until after the alpha |
 | Panic of one core's kernel | The kernel restarts alone and the machine continues; see [kernel.md](kernel.md#recovery-of-one-cores-kernel) |
-| Hang | A hardware watchdog armed by the kernel; a heartbeat per service, watched by the service manager |
+| Hang | A hardware watchdog (who arms it is open: the kernel contract recommends the platform service, fed by the service manager, since the kernel reads no table that describes it, D-112; see [Open points](kernel-interface.md#open-points)); a heartbeat per service, watched by the service manager; the hang of one core's kernel is detected by the cores group ([Detection](kernel-interface.md#detection-evidence-not-opinion)) |
 | Reboot loop | A/B/R slots, automatic rollback (see [storage.md](storage.md#updates)) |
 | Requested shutdown | Decided, 14 November 2026: the system calls `suspend` on the running applications with a bounded delay (starting value 500 ms, to calibrate), calls `sync` on storage, then powers off. A crash skips the first step; that is the only difference between shutdown and crash. Devices are reset at boot, not at shutdown |
 
@@ -67,7 +67,7 @@ Principle: shutdown and crash follow the same path ("crash-only" software, Cande
 
 ## Observability
 
-**Decided, 14 November 2026.** A system log, a profiler per capability, and a kernel debugger through the USB debug port.
+**Decided, 14 November 2026.** A system log, a profiler per capability, and a kernel debugger through the USB debug port. The kernel debugger is a stub of development images, over a stub link that is a serial port or the USB debug port (which link the reference desktop uses is open: [Open points](kernel-interface.md#open-points)); the log service reads the kernel's trace rings through the kept frame of the crash area ([Debugging](kernel-interface.md#debugging-call-reference)).
 
 ## Power and sleep
 

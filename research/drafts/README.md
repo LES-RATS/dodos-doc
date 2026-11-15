@@ -5,12 +5,11 @@ Working drafts written by agents, kept here so that they are not lost. They are 
 | Draft | Status |
 |---|---|
 | `memory.md`, `scheduling-time.md`, `irq-tasks-startup.md` | Integrated into the contract on 14 November 2026 (D-110) |
-| `nodes-memory-devices.md` | Not integrated. Memory that changes owner between nodes, devices that follow their driver (D-112, D-113) |
-| `ownership-alternatives.md` | Not integrated. Survey and the write gate (D-115) |
-| `heterogeneous-cores.md` | Not integrated. Cores described by numbers, kinds, feature masks (D-115) |
-| `symmetric-nodes-recovery.md` | Not integrated. Roles instead of privileged nodes, the cores group, recovery order (D-115). Its "unfenced core" weakness is rejected by the owner (D-116) |
-| `debug-ioports-gaps.md` | Not integrated. Debugging (trace rings, crash record, console, debugger stub), `ioports`, and the gaps found in the contract (15 November 2026) |
-| `fencing-without-cooperation.md` | Not integrated, not decided. Five families of answers to D-116 (stopping a core without its cooperation), with costs and sources; recommends a thin monitor under every node (15 November 2026) |
-| `gate-page-tables.md` | Not integrated. The write gate over the page tables (D-117): flaws of the first wording, rules G1 to G14, the mechanism on x86-64, ARM64 and RISC-V, costs, measures to make (15 November 2026) |
-
-They are integrated together, after pass 11 of the reference model.
+| `nodes-memory-devices.md` | Integrated on 16 November 2026: chunks, floors, ownership words, `memory_take`, `memory_give`, `memory_split`, the device table, devices that follow their driver ([Memory and devices between nodes](../../architecture/kernel-interface.md#memory-and-devices-between-nodes)). Its hardware node became one role per unit, and its anchor nodes reserve roles, as the recovery draft proposed |
+| `ownership-alternatives.md` | Integrated on 16 November 2026: the living part of the machine table is read-only in every kernel and written only through the write gate (D-115) ([The write gate](../../architecture/kernel-interface.md#the-write-gate)) |
+| `heterogeneous-cores.md` | Integrated on 16 November 2026, as amended by D-118 (one vector length per kind, a mask that `thread_set_features` changes, instructions counted on demand) ([Unlike cores](../../architecture/kernel-interface.md#unlike-cores)) |
+| `symmetric-nodes-recovery.md` | Integrated on 16 November 2026: roles, membership, the fence, reclaim and its barrier, the cores group, every node started the same way from the kept image ([Cores](../../architecture/kernel-interface.md#cores)). Its fence follows D-117, and its "unfenced core" is bounded by the gate (D-116, D-120) |
+| `debug-ioports-gaps.md` | Integrated on 16 November 2026: debugging, `ioports`, the gaps of its part 3; the console follows D-118 and the rulings of 16 November (hardware breakpoints for user threads, a hook for user interrupts, an entropy call) ([Debugging](../../architecture/kernel-interface.md#debugging-call-reference)) |
+| `fencing-without-cooperation.md` | Integrated on 16 November 2026 as far as D-117 decided it: the cheapest stop per architecture, the monitor as an optional layer the image declares, the free hooks ([The fence](../../architecture/kernel-interface.md#the-fence-stopping-a-core)). The rest stays a survey |
+| `gate-page-tables.md` | Integrated on 16 November 2026: rules G1 to G14 in the contract ([The gate over page tables](../../architecture/kernel-interface.md#the-gate-over-page-tables)), the mechanisms in [kernel.md](../../architecture/kernel.md#the-write-gate-mechanisms) |
+| `abi-changes.md` | Written 16 November 2026: the values `abi/` must gain or change, and what pass 12 of the reference model must cover |

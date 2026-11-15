@@ -27,6 +27,7 @@ From the cheapest to the strongest.
 - Firmware, then the signed boot image, then the system, which is a hash. Every blob is verified on read by its Merkle tree: at reboot, the machine is exactly that hash.
 - All executable code descends from a signed blob. Only the compile service produces machine code, cached by component hash, compiler version and instruction set (see [wasm-abi.md](wasm-abi.md#compile-service)). Applications cannot create an executable page. The only exception under discussion is the JIT of the web process (**Open**; see [web.md](web.md#jit-in-the-web-content-process)).
 - System calls are accepted only from the kernel-supplied code page (see [kernel.md](kernel.md#base-decisions)).
+- Inside the kernel, a write gate is the only writer of the page tables, the IOMMU tables and the machine table, so a faulty kernel on one core is bounded to its own memory (D-117, D-120; [The gate over page tables](kernel-interface.md#the-gate-over-page-tables)). The console exists only if the signed image declares one, and never shows an address or memory contents (D-118).
 - The user can enrol their own keys: the machine stays theirs.
 
 ## Permissions
@@ -36,7 +37,7 @@ From the cheapest to the strongest.
 | Permissions | Centralised: one right = one capability = one revocable line | Decided |
 | Persistence of rights | Static rights are re-derived from the manifest; dynamic rights live in a handle table kept by the system | Aligned |
 | Rights screen | A query on the capability tree (see [ui.md](ui.md#settings-notifications-and-rights)) | Proposed |
-| Debugging | Debugging a component is a capability, one per component. There is no global developer mode: the user enrols a developer key | Proposed |
+| Debugging | Debugging a component is a capability, one per component. There is no global developer mode: the user enrols a developer key. The kernel has no object for it: the supervisor hands the debugger the component's thread capabilities (registers and hardware breakpoints) and forwards its faults. The kernel debugger stub exists only in development images, which only a developer key signs ([Debugging](kernel-interface.md#debugging-call-reference)) | Proposed |
 
 ## Accounts and user keys
 

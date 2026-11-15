@@ -55,6 +55,7 @@ Drivers run in user space, one process per driver, behind stable interfaces. Mos
 - Interrupt remapping is enabled: a device cannot forge interrupts.
 - Devices that the hardware cannot separate go into the same driver process.
 - The IOMMU is active before the first driver starts. On a machine without an IOMMU, drivers are declared trusted, and this is displayed.
+- A driver's `iospace`, its device memory and its interrupts belong to the node where the driver runs (D-113). Each IOMMU unit is driven by the node that holds its role, and the death of that node does not stop the devices of other nodes: only changes on that unit wait while the role is taken over ([Devices and shared hardware](kernel-interface.md#devices-and-shared-hardware)). The IOMMU tables are written only by the write gate (D-120), so a faulty kernel cannot point a device at another node's memory.
 
 The IOMMU domain is one of the three isolation boundaries (see [security.md](security.md#three-boundaries)).
 

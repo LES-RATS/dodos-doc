@@ -7,7 +7,7 @@ The mechanism is in the kernel and the policy is in user space.
 ## Mechanism in each core's kernel
 
 - Each kernel has one local run queue, without locks.
-- A thread runs only if it holds a **scheduling context**: a kernel object designated by a capability, which carries a budget, a period, a deadline and a core class (model of seL4 MCS, from memory).
+- A thread runs only if it holds a **scheduling context**: a kernel object designated by a capability, which carries a budget, a period, a deadline, a slack class and the set of cores where it may be placed (model of seL4 MCS). Which kind of core a context goes to is the placement service's choice, expressed by that set ([Unlike cores](kernel-interface.md#unlike-cores)).
 - The kernel picks the nearest deadline among the contexts that still have budget, and gives the time that none of them wants to throttled contexts, by class (D-110, see [What runs next](kernel-interface.md#what-runs-next)).
 - The kernel moves a thread only within the set of cores that the placement service has authorised for it (**Decided**, 14 November 2026).
 - Budgets are counted in time (**Decided**, 14 November 2026).
@@ -45,7 +45,7 @@ The kernel's only clock is monotonic; wall-clock time is a service (see [platfor
 - **Agent inference.** Interactive class while the agent answers the user, background class otherwise; its GPU batches can be preempted at every frame.
 - **GPU.** The GPU service applies the same classes to submissions, in the same deadline graph (see [gpu.md](gpu.md#gpu-scheduling)).
 - **Input and output queues** (**Decided**, 14 November 2026). The classes apply to the disk and network queues; budgets for them come later.
-- **Core class in the contract** (**Aligned**: retained). The core class is part of the contract of a scheduling capability: the frame path on fast cores, background work on efficiency cores.
+- **Core class in the contract** (**Aligned**: retained). The core class is part of the contract of a scheduling capability: the frame path on fast cores, background work on efficiency cores. The promise is made by the placement service, through the cores set of the contexts it configures; the kernel holds no core class, and describes each core by numbers, not a class (D-115).
 - **Starting values, to calibrate.** Period of the frame class equal to that of the screen (8.3 ms at 120 Hz); reserve of the frame class capped at half of each fast core; background slice of 10 ms.
 
 ## Background execution
@@ -63,11 +63,11 @@ The placement service runs in user space.
 
 ### Core load
 
-- **Measurement.** Each kernel knows the exact load of each context, because it debits the budgets. It gives it per context by `sched_read` and per core by `core_status` (D-110); a page listing every context could not have a fixed size. There is no statistical estimate as in Linux.
-- **Two speeds.** Reflex in the kernel: a core with no work asks a neighbour, by message, for a ready context, within the set of cores that the placement service authorised for that context. Policy in user space: the placement service rebalances, groups and chooses core types, on the scale of a few periods.
-- **Frequency.** In version 1, only per-class preferences are set: on Intel, the hardware sets the frequency itself (HWP, from memory), and the system gives it, per core, the bounds and the energy or performance preference according to the class; the preference is set per core by the Cores group, not at each switch of context (D-110). On-demand frequency is deferred until after the alpha (**Decided**, 14 November 2026). The deferred proposal: deadlines are known, so the frequency of a core is chosen to finish the budget just before the deadline, instead of reacting to load after the fact; a user input raises the frequency of the frame path before the load arrives.
+- **Measurement.** Each kernel knows the exact load of each context, because it debits the budgets. It gives it per context by `sched_read` (with the instructions retired, on demand: D-118) and per core by `core_status` (D-110); a page listing every context could not have a fixed size. There is no statistical estimate as in Linux.
+- **Two speeds.** Reflex in the kernel: a core with no work sleeps, and under low load the nodes of several cores are parked on one core (D-108); the kernel moves no thread by itself (D-115 proposal of 16 November 2026: a thread object never changes node, so a move is `thread_move`, [Unlike cores](kernel-interface.md#unlike-cores)). Policy in user space: the placement service rebalances, groups, chooses core types and moves threads within the set of cores it authorised, on the scale of a few periods.
+- **Frequency.** In version 1, only per-class preferences are set: on Intel, the hardware sets the frequency itself (HWP, from memory), and the system gives it, per core, the bounds and the energy or performance preference according to the class; the preference is set per core with `core_perf` ([Cores](kernel-interface.md#cores)), not at each switch of context (D-110). On-demand frequency is deferred until after the alpha (**Decided**, 14 November 2026). The deferred proposal: deadlines are known, so the frequency of a core is chosen to finish the budget just before the deadline, instead of reacting to load after the fact; a user input raises the frequency of the frame path before the load arrives.
 - **Cores on demand.** Deferred until after the alpha (**Decided**, 14 November 2026). The deferred proposal: the number of active kernels follows the load (see [kernel.md](kernel.md#dynamic-structure)).
-- **Hardware hints** on the nature of each thread (Intel Thread Director, from memory): one more input for the placement service.
+- **Hardware hints** on the nature of each thread (Intel Thread Director, AMD's workload classification): one more input for the placement service, which the kernel records per context when the placement service counts it (`sched_count`, [Unlike cores](kernel-interface.md#unlike-cores)), with the instructions retired (D-118).
 - **Hardware threads.** Two hardware threads of one physical core never serve two different publishers at the same time (side channels). In version 1 the second thread stays idle (see [kernel.md](kernel.md#multi-core-structure)).
 
 ## In a process
@@ -92,7 +92,7 @@ The case: a background client is inside the service when a frame-class client ar
 - A process holds a core group: the set of cores where its address space is active. Operations on the address space (mapping, revocation, TLB invalidation) concern only that group.
 - The placement service grows or shrinks the group according to the load.
 - The budget is a reserve of the group, from which each per-core context draws slices.
-- A group is of a single core type by default.
+- A group is of a single core type by default. A budget is in nanoseconds of the core the context runs on, and the kernel scales nothing across unlike cores; a move to another kind may carry new parameters (`thread_move`).
 - The kernel notifies the runtime of the number of cores it has at that moment, so that the runtime sizes its threads instead of overloading (idea of scheduler activations, from memory).
 - A thread preempted while it holds a lock: the waiter lends it its context, by the same lending mechanism as above (not in the kernel, D-110).
 

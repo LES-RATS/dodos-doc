@@ -6,9 +6,9 @@ The split is the same as for scheduling: the mechanism is in the kernel and the 
 
 ## Kernel memory
 
-- **No heap in the kernel.** All the memory the kernel needs for an object comes from a memory capability supplied by whoever creates the object (model of seL4, from memory). A program therefore cannot exhaust kernel memory. The exact rule is rule 3 of the [kernel interface](kernel-interface.md#rules): no kernel memory that grows at run time; only fixed tables sized when a node starts (the interrupt table, the IOMMU units) and the start-up objects are outside any untyped (D-110).
+- **No heap in the kernel.** All the memory the kernel needs for an object comes from a memory capability supplied by whoever creates the object (model of seL4, from memory). A program therefore cannot exhaust kernel memory. The exact rule is rule 3 of the [kernel interface](kernel-interface.md#rules): no kernel memory that grows at run time; only fixed tables sized when the machine or a node starts (the machine table, the interrupt table, the IOMMU units, the kept image) and the start-up objects are outside any untyped (D-110).
 - **Memory service** (**Decided**). The memory service, in user space, holds the memory capabilities and supplies pages and page tables at the time of a page fault. The page reserve of each kernel is an advance that the memory service handed to it.
-- **Physical memory per core.** Each kernel has its own share of physical memory, without locks. The shares are fixed at start-up (D-107, and their split in [Start-up state](kernel-interface.md#start-up-state)); memory of another share is used through remote mappings recorded on both sides.
+- **Physical memory per core.** Each kernel has a fixed floor (D-107, amended by D-114); the rest of memory moves between kernels in chunks (one first large page, 2 MB on the reference machine), driven by the memory service with `memory_take` and `memory_give`; who owns each chunk is recorded in the machine table, written only by the owner's gate (D-112 to D-115, [Memory and devices between nodes](kernel-interface.md#memory-and-devices-between-nodes)). Memory of another node is used only through a grant, recorded on both sides, and only when it is shared. The memory service keeps movable runs apart from runs pinned by kernel objects or by DMA, since a run can leave a node only when nothing made from it lives.
 - **NUMA** (machines whose memory is split between processor sockets) is out of scope as long as no target has it (**Decided**).
 
 ## Memory objects
@@ -29,9 +29,9 @@ A **memory object** (model of Fuchsia) is a set of pages designated by a capabil
 
 ## Page sizes
 
-- 4 KB by default. 2 MB pages for Wasm memories and compiled code only above a size threshold (**Decided**).
+- The page of the machine by default (D-121: 4 KB on x86-64; [Values of the machine](kernel-interface.md#values-of-the-machine)). The first large page (2 MB on the reference machine) for Wasm memories and compiled code only above a size threshold (**Decided**, D-044, restated in the machine's sizes by D-121).
 - A Wasm memory reserves its virtual space with guard pages, which removes bounds checks. This holds for 32-bit memories only (**Decided**).
-- 1 GB pages, for inference, come after the alpha (**Decided**). The kernel supports them from its first version (D-110).
+- The second large page (1 GB on the reference machine), for inference, comes after the alpha (**Decided**). The kernel supports it from its first version (D-110).
 
 ## Budget, without overcommit
 
