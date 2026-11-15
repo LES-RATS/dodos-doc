@@ -10,11 +10,11 @@ The kernel knows nothing about Wasm, WIT or components. The runtime and the serv
 
 1. **Everything is a capability.** A system call names its target by a slot in the caller's capability space. There is no global name and no ambient right.
 2. **Any call can fail with `gone`.** A capability is revocable at any time (rule 1 of the [ABI](wasm-abi.md#abi-rules)).
-3. **No kernel memory that grows at run time.** The memory of every object comes from an untyped capability supplied by the creator (see [memory.md](memory.md#kernel-memory)). The only exceptions are fixed when a node starts and never grow (D-110): the start-up objects, which are made from no untyped; the interrupt table of each node and its `irq_control`; the `memory_control` of each node; the machine table, its fixed part and its living part (ownership words, device table, gate words and page classes, member and role tables, grant and use tables, proxies: [Memory and devices between nodes](#memory-and-devices-between-nodes)); the interrupt remapping table; the tables of the IOMMU units and their `iommu` objects; the clock page; the tables through which each kernel maps the memory it holds. Besides these, the kernel holds only its image, its stacks and the block of each node (see [Start-up state](#start-up-state)).
+3. **No kernel memory that grows at run time.** The memory of every object comes from an untyped capability supplied by the creator (see [memory.md](memory.md#kernel-memory)). The only exceptions are fixed when a node starts and never grow (D-110): the start-up objects, which are made from no untyped; the machine objects (`core`, `iommu`, `role`); the kept image and the slot of a replacement kernel image; the beacons of every node and core; the hardware feedback tables; on x86-64, the page of the park stub; the interrupt table of each node and its `irq_control`; the `memory_control` of each node; the machine table, its fixed part and its living part (ownership words, device table, gate words and page classes, member and role tables, grant and use tables, proxies: [Memory and devices between nodes](#memory-and-devices-between-nodes)); the interrupt remapping table; the tables of the IOMMU units and their `iommu` objects; the clock page; the tables through which each kernel maps the memory it holds. Besides these, the kernel holds only its image, its stacks and the block of each node (see [Start-up state](#start-up-state)).
 4. **Every call is bounded.** A long operation (revocation, deletion of a large object, clearing of memory) runs in bounded steps and returns `again`; the caller repeats the call.
 5. **A call never blocks the kernel.** The kernel has no per-thread stack. A thread that waits is a state of the thread, and the kernel returns to its scheduler.
 6. **Calls enter through the kernel-supplied code page.** Call numbers are private to that page and can change between kernel versions.
-7. **Objects belong to one core's kernel.** A call on an object held by another kernel becomes a message between kernels. The caller sees the same result, later. Memory belongs to one node at a time: each chunk of ordinary memory and each entry of device memory has one owner, recorded in the living part of the machine table, which only the owner's write gate changes; a capability or a frame reaches another node only through a grant ([Memory and devices between nodes](#memory-and-devices-between-nodes)).
+7. **Objects belong to one core's kernel.** A call on an object held by another kernel becomes a message between kernels. The caller sees the same result, later. The machine objects (`core`, `iommu`, `role`) belong to no node: their state is in the machine table, which every kernel reads and which changes only through the write gates. Memory belongs to one node at a time: each chunk of ordinary memory and each entry of device memory has one owner, recorded in the living part of the machine table, which only the owner's write gate changes; a capability or a frame reaches another node only through a grant ([Memory and devices between nodes](#memory-and-devices-between-nodes)).
 8. **Data never crosses IPC.** IPC carries control. Data moves through shared memory objects (see [Data plane](#data-plane)).
 
 ## Objects
@@ -35,10 +35,11 @@ The kernel knows nothing about Wasm, WIT or components. The runtime and the serv
 | `irq_control` | The authority to claim the vectors of one node | seL4 |
 | `ioports` | A range of x86 I/O ports (architecture layer only) | seL4 |
 | `iospace` | An IOMMU domain: what a device can reach by DMA | seL4, Fuchsia BTI |
-| `iommu` | One IOMMU unit, made by the kernel at start. With `manage`, attaches devices of that unit to an `iospace` | Project |
+| `iommu` | One IOMMU unit, made by the kernel at start. With `manage`, attaches devices of that unit to an `iospace`. A machine object, driven by the holder of its role | Project |
 | `memory_control` | The authority to take, give and split the blocks of memory of one node. One per node, made at start-up | Project |
 | `task` | The unit of provenance and of stopping: identifier, marks, attached threads. Stopped in one operation ([research axis 4](../research/prior-art.md#kernel-research-axes)) | Project |
-| `core` | Control of one core's kernel: start, stop, replace, recover, status; with `write`, the right to configure scheduling contexts on that core | Barrelfish/DC, seL4 MCS |
+| `core` | Control of one node: start, stop, placement, status, watch; with `write`, its idle table and the right to configure and count its scheduling contexts; with `send`, the node's mailbox. A machine object ([Cores](#cores)) | Barrelfish/DC, seL4 MCS |
+| `role` | One duty with one holder at a time: an IOMMU unit, an IOAPIC, a memory reserve, a leadership. A machine object ([Roles](#roles)) | Project |
 | `debug` | Console, trace buffer, crash record | Project |
 | `vcpu` | Reserved name and number (16), not built. It exists only if the [micro-VM fallback](drivers.md#drivers-in-micro-vms-fallback) is opened | — |
 
@@ -48,19 +49,19 @@ The **memory object** of [memory.md](memory.md#memory-objects) (sharing, copy on
 
 ## System calls
 
-51 calls. All take capability slots and words. Every call is specified in the [Call reference](#call-reference), except those of the groups not yet specified (cores, debugging).
+59 calls. All take capability slots and words. Every call is specified in the [Call reference](#call-reference), except those of the group not yet specified (debugging).
 
 | Group | Calls | Notes |
 |---|---|---|
 | Capabilities | `cap_derive`, `cap_move`, `cap_delete`, `cap_revoke`, `cap_inspect`, `cspace_grow` | `cap_derive` copies with fewer rights or with a badge. `cap_revoke` deletes everything derived from a capability; it is the distributed two-phase protocol between kernels, and it returns `again` |
 | Memory | `untyped_retype`, `aspace_map`, `aspace_unmap`, `aspace_protect`, `memory_take`, `memory_give`, `memory_split` | `aspace_map` maps up to *E* pages of one frame (one table's worth of entries), whatever the page size of the frame. `memory_take` and `memory_give` move memory between nodes in runs of up to *E* chunks |
 | IPC | `call`, `reply_recv`, `recv`, `send`, `signal`, `wait`, `poll`, `notify_bind` | `call` and `reply_recv` are the fast path. `send` never blocks and never queues. `recv` on an endpoint with a bound `notify` also returns notifications |
-| Threads | `thread_configure`, `thread_read_regs`, `thread_write_regs`, `thread_resume`, `thread_suspend`, `thread_cancel` | |
-| Scheduling | `sched_configure`, `sched_bind`, `sched_unbind`, `sched_set_cores`, `sched_read`, `yield` | Admission and `sched_set_cores` need a `core` capability with `write` |
+| Threads | `thread_configure`, `thread_read_regs`, `thread_write_regs`, `thread_resume`, `thread_suspend`, `thread_cancel`, `thread_set_features`, `thread_move` | `thread_move` hands a thread's state to a thread of another node ([Unlike cores](#unlike-cores)) |
+| Scheduling | `sched_configure`, `sched_bind`, `sched_unbind`, `sched_set_cores`, `sched_read`, `sched_count`, `yield` | Admission and `sched_set_cores` need a `core` capability with `write` |
 | Time | `timer_set`, `timer_cancel` | The monotonic clock is read by `clock_now` in the code page, from the clock page, without a call |
 | Interrupts and devices | `irq_claim`, `irq_bind`, `irq_ack`, `iospace_map`, `iospace_unmap`, `iospace_attach` | `iospace_attach` takes an `iommu` capability and a device identifier |
 | Tasks | `task_attach`, `task_mark`, `task_exempt`, `task_revoke`, `task_read` | A task is made by `untyped_retype`, like every object. See [Tasks and marks](#tasks-and-marks) |
-| Cores | `core_start`, `core_stop`, `core_status` | Replacement and recovery are `core_stop` followed by `core_start` with a kernel image |
+| Cores | `core_start`, `core_stop`, `core_status`, `core_idle`, `core_watch`, `core_place`, `role_claim`, `role_hand` | Replacement is `core_stop` mode seal followed by `core_start` mode resume; recovery is automatic up to the node's death, and a reload is `core_start` mode fresh ([Cores](#cores)) |
 | Debug | `debug_write`, `trace_emit` | Present in every build; the capability decides who may call them |
 
 Faults are not calls. A page fault, another processor exception, a system call made outside the code page, a thread with no address space and a thread that lost its scheduling context each become a message on the thread's fault endpoint; the handler answers through the `reply` object. The message, its delivery and the answer are specified in [Faults](#faults).
@@ -128,7 +129,7 @@ Before these checks, a thread bound to no capability space, or attached to a rev
 
 1. the capability the call acts on: its slot (`invalid` if empty or out of range, `gone` if dead), its kind (`invalid`), its rights (`denied`);
 2. the other capability arguments, in the order of the table below, with the same three checks. A destination or any other slot address is a capability argument: its `via` capability and its range are judged here, and that the slot is empty only with the state. One exception: a message header is read right after the capability the call acts on (whose rights, `grant` included, are judged first with the number of capabilities the header states), because it says how many capabilities the message lists; a header beyond the limits, with a flag bit other than `add_marks` set by the sender, with an added-marks word that has a reserved bit, or that needs a message page the thread does not have (D-110), is `invalid` before any other capability argument is looked at;
-3. the plain arguments, in the order of the table (`invalid`); for `untyped_retype` the kind is judged before the size argument: a kind that this version does not make (`ioports`, `core`, `debug` and the reserved `vcpu`) is `unsupported` there, after the rule on device memory, and a kind that is never made from an untyped (`irq`, `irq_control`, `iommu`, `memory_control`) is `invalid` (D-110); for a frame the size argument is judged in this order: the page size value (`invalid`), whether the processor supports it (`unsupported`), the memory type (`invalid` if it does not suit the kind of memory), the number of pages (`invalid`) (D-110); the depth checks (the limit of 64 and the rule on what a space holds) come last;
+3. the plain arguments, in the order of the table (`invalid`); for `untyped_retype` the kind is judged before the size argument: a kind that this version does not make (`ioports`, `debug` and the reserved `vcpu`) is `unsupported` there, after the rule on device memory, and a kind that is never made from an untyped (`irq`, `irq_control`, `iommu`, `memory_control`, `core`, `role`) is `invalid` (D-110); for a thread the size argument is its feature mask, judged by the rules of [The feature mask of a thread](#the-feature-mask-of-a-thread) (`invalid`, then `unsupported`); for a frame the size argument is judged in this order: the page size value (`invalid`), whether the processor supports it (`unsupported`), the memory type (`invalid` if it does not suit the kind of memory), the number of pages (`invalid`) (D-110); the depth checks (the limit of 64 and the rule on what a space holds) come last;
 4. the state: `busy`, `no_slot` (the destination slot is not empty), `no_memory`, `would_wait`, `budget` (only `sched_configure` returns it, and it has no other state error, D-110).
 
 A call that passes every check may still return `again`, having done a bounded step of its work (removal, clearing of memory), or, for `recv` and `reply_recv` by a thread without an own context, having recorded a fault *no context* that it could not receive ([Faults](#faults)).
@@ -142,7 +143,7 @@ A call that passes every check may still return `again`, having done a bounded s
 | `cap_delete` | slot | | No right on the capability itself. Returns `again` while descendants remain |
 | `cap_revoke` | slot | | No right on the capability itself. Returns `again` while descendants remain |
 | `cap_inspect` | slot | kind, rights, badge | No right on the capability itself |
-| `untyped_retype` | untyped, kind, size argument, destination | | `write` on the untyped. One object per call. The size argument is: bytes for a child `untyped` (a power of two, at least one page), the page size index, the memory type and the number of pages (1 to *E*) for a `frame` (D-110), the maximum number of slots for a `cspace` (at most 2^20), and 0 for the other kinds. A size that does not fit in 64 bits is `invalid`. Device memory can only become a `frame` or a child `untyped` (`invalid` otherwise). An `irq`, an `irq_control`, an `iommu` or a `memory_control` is never made by this call (`invalid`, D-110). Returns `again` while it clears memory (rules below) |
+| `untyped_retype` | untyped, kind, size argument, destination | | `write` on the untyped. One object per call. The size argument is: bytes for a child `untyped` (a power of two, at least one page), the page size index, the memory type and the number of pages (1 to *E*) for a `frame` (D-110), the maximum number of slots for a `cspace` (at most 2^20), the feature mask for a `thread` ([Unlike cores](#unlike-cores)), and 0 for the other kinds. A size that does not fit in 64 bits is `invalid`. Device memory can only become a `frame` or a child `untyped` (`invalid` otherwise). An `irq`, an `irq_control`, an `iommu`, a `memory_control`, a `core` or a `role` is never made by this call (`invalid`, D-110). Returns `again` while it clears memory (rules below) |
 | `cspace_grow` | cspace, untyped | new number of slots | `manage` on the cspace, `write` on the untyped, which must be the one the cspace was created from (`invalid`). `no_slot` when the maximum is reached |
 
 Rules of `untyped_retype`:
@@ -185,10 +186,10 @@ The `reply` object is supplied by the server, because the kernel has no memory o
 
 | Call | Arguments | Result | Rights and rules |
 |---|---|---|---|
-| `call` | endpoint, message, receive range, wait number | the reply | `send`, and `grant` if the message lists capabilities. If a thread waits to receive, the message is delivered, that thread's reply object is armed with the caller, and the caller waits for the reply; the delivery lends the caller's scheduling context to a receiver that has none of its own (D-110, see [The budget follows the call](#the-budget-follows-the-call)). Otherwise the caller joins the queue of the endpoint, first in, first out |
+| `call` | endpoint, message, receive range, wait number | the reply | `send`, and `grant` if the message lists capabilities. The endpoint may be a `core` capability with `send`: the call goes to that node's mailbox ([Machine objects](#machine-objects)). If a thread waits to receive, the message is delivered, that thread's reply object is armed with the caller, and the caller waits for the reply; the delivery lends the caller's scheduling context to a receiver that has none of its own (D-110, see [The budget follows the call](#the-budget-follows-the-call)). Otherwise the caller joins the queue of the endpoint, first in, first out |
 | `recv` | endpoint, reply object, receive range, wait number | a message, or a notification | `recv` on the endpoint, `recv` on the reply object, which must be idle (`busy`, before anything is received: a pending notification stays pending). In order: the lends of the thread and of the reply object are released (D-110); a pending notification of the bound `notify`, if the thread has an own scheduling context (D-110); the first caller in the queue (a thread without an own context that finds a fault *no context* there gets `again` instead: [Faults](#faults)); otherwise the thread waits, with the reply object attached |
 | `reply_recv` | reply object, message, endpoint, receive range, wait number | as `recv` | `send` on the reply object, then as `recv` with the same reply object, which may here be armed or idle (attached to another thread is `busy`). If the reply object is not armed, the reply is dropped without an error and the receive goes on |
-| `send` | endpoint or reply object, message | | `send`, and `grant` if the message lists capabilities. On an endpoint: delivered only if a thread waits to receive and the first one has an own scheduling context (D-110), otherwise `would_wait`; nothing is queued. On a reply object: answers the caller and makes the object idle; `would_wait` if it is not armed |
+| `send` | endpoint or reply object, message | | `send`, and `grant` if the message lists capabilities. A `core` capability with `send` names that node's mailbox, as for `call`. On an endpoint: delivered only if a thread waits to receive and the first one has an own scheduling context (D-110), otherwise `would_wait`; nothing is queued. On a reply object: answers the caller and makes the object idle; `would_wait` if it is not armed |
 
 - **`send` on a reply object is the way to answer without receiving** (a server that answers later, from several reply objects). There is no separate `reply` call.
 - **`send` never queues (design choice).** A queue of messages would need kernel memory. The queue of callers needs none: each waiting thread is linked through its own thread object, and its message stays in its own message page. Threads that wait on the same object are served first in, first out. The links go both ways, so taking a thread out of a queue is one step whatever the length of the queue; the length itself is bounded only by the number of threads, each of which was paid for by its creator. A sender that must not lose a message uses `call`, or a ring with a `notify`.
@@ -377,7 +378,7 @@ A fault is not a call. The kernel turns it into a message on the thread's fault 
   | 1 | the stack pointer |
   | 2 | the architecture's exception number (x86-64: the vector); 0 for kinds 6, 7 and 8 |
   | 3 | for a page fault, the access: bit 0 read, bit 1 write, bit 2 execute, bit 3 *present* (the address was translated, but without the right needed), and the architecture's error code in bits 32-63. For the other exceptions, the architecture's error code, 0 if it has none. 0 for kinds 6, 7 and 8 |
-  | 4 | an architecture address: the address of the access for a page fault (CR2 on x86-64), DR6 for a debug exception, otherwise 0 |
+  | 4 | an architecture address: the address of the access for a page fault (CR2 on x86-64), DR6 for a debug exception; for an undefined instruction, 1 + the bit of the feature whose disabled state trapped, or 0 ([Unlike cores](#unlike-cores)); otherwise 0 |
 
 - **Kinds** (the label):
 
@@ -411,7 +412,7 @@ A fault is not a call. The kernel turns it into a message on the thread's fault 
 
 - **The contract fixes** that the block is a sequence of 64-bit words, at most 64, that travels as the message words of the call (result or argument), so through the caller's message page. Word 0 is the instruction pointer, word 1 the stack pointer and word 2 the flags. The block of a new thread is all zeros, except the flags at their fixed value.
 - **The architecture layer fixes** the number of words, the order of the others, which words must be canonical, and the mask of the flags. x86-64: 20 words. In order: rip, rsp, rflags, rax, rbx, rcx, rdx, rsi, rdi, rbp, r8 to r15, fs_base, gs_base. Words 0, 1, 18 and 19 must be canonical. rflags keeps CF, PF, AF, ZF, SF, TF, DF, OF, AC and ID as given (the user mask, `RFLAGS_USER_MASK`); IF and bit 1 are always 1 (the fixed value 0x202, `RFLAGS_FIXED`); every other bit is 0. So the value a thread sees is (the value given AND the user mask) OR 0x202, and a new thread has rflags 0x202. With APX the block grows by r16 to r31 (36 words, still a message).
-- **The vector state is not in the block (design choice).** Its size and format depend on the processor and on the features the kernel enables, and the contract would have to version them. The alternative was a frame argument that receives the XSAVE image. The kernel's debugger stub reads the vector state for kernel debugging. A user-space debugger of native services gets the general registers only.
+- **The vector state is not in the block (design choice).** Its size and format depend on the processor and on the features the kernel enables, and the contract would have to version them. The alternative was a frame argument that receives the XSAVE image. The kernel's debugger stub reads the vector state for kernel debugging. A user-space debugger of native services gets the general registers only. The size of the vector state depends on the thread's feature mask ([Unlike cores](#unlike-cores)).
 - **The fault record.** After the block, `thread_read_regs` returns six words: word 0 holds in bits 0-31 the kind of the fault recorded in the thread (0 if none) and 0 in the other bits; words 1 to 5 are the five words of that fault ([Faults](#faults)). A fault is recorded when it is not delivered (no handler, or a fault *no context* that found no receiver with an own context), and the record is cleared when the thread is resumed (`thread_resume` on a suspended thread, or an answer to a fault that resumes it). The architecture layer keeps the block at most 58 words, so the block and the record fit in the 64 message words.
 - Both calls do constant work (at most 64 words).
 
@@ -472,7 +473,7 @@ A context made by `untyped_retype` (size argument 0) is not configured, has no h
 | `sched_bind` | sched, thread | | `manage` on the sched, `manage` on the thread, which must belong to the kernel that holds the sched (`invalid`, judged right after its three checks). `busy` if the sched has a home, if the thread has an own context, or if a context is lent to it. The thread may be suspended, waiting, or bound to no capability space |
 | `sched_unbind` | sched | | `manage`. Succeeds when the sched has no home |
 | `sched_set_cores` | sched, core, window, mask | | `manage` on the sched, `write` on the core, which must be the core of the kernel that holds the sched (`invalid`, judged right after its three checks). The set is the cores whose core number is 64 × window + *i*, for each bit *i* set in the mask. `invalid` if the window is 1024 or more, if the mask is 0, or if the set does not contain the own core of the node that holds the sched (the core whose number is the node's index) |
-| `sched_read` | sched | consumed, remaining, deadline, state | `read`. Remaining is a signed word. The state word has bit 0 configured, bit 1 throttled, bit 2 has a home, bit 3 lent (its chain is not empty). A context that is not configured reads consumed 0, remaining 0, deadline 0, and its state bits: becoming not configured sets consumed to 0 |
+| `sched_read` | sched | consumed, remaining, deadline, state, instructions | `read`. Remaining is a signed word. The state word has bit 0 configured, bit 1 throttled, bit 2 has a home, bit 3 lent (its chain is not empty), bit 4 counted, bits 8-15 1 + the last hardware class or 0 ([Unlike cores](#unlike-cores)). Instructions is the count of `sched_count`, 0 when counting is off. A context that is not configured reads consumed 0, remaining 0, deadline 0, and its state bits: becoming not configured sets consumed to 0 |
 | `yield` | | | No capability. See [What runs next](#what-runs-next). A thread that has no context never runs, so it never makes this call |
 
 Rules of the calls:
@@ -580,7 +581,7 @@ A `timer` is one deadline that, when it falls due, signals a `notify`. It is **i
 #### Idle
 
 - **A core is idle when no context is eligible.** Its kernel sets the hardware timer to the next instant it must act (the earliest replenishment instant or firing instant, which it knows exactly because there is no periodic tick) and puts the core in the deepest idle state whose exit latency plus minimum residency is shorter than the time until that instant. An interrupt wakes it. With no armed instant, it takes the deepest state.
-- The idle states of a processor are described by firmware (ACPI), which the kernel does not read; the table of states (exit latency, minimum residency, how to enter) is given to the kernel of each core by user space through a call of the Cores group. Until a table is given, the kernel uses the architecture's plain halt instruction.
+- The idle states of a processor are described by firmware (ACPI), which the kernel does not read; the table of states (exit latency, minimum residency, how to enter) is given to the kernel of each node by user space with `core_idle` ([Cores](#cores)). Until a table is given, the kernel uses the architecture's plain halt instruction.
 - Idle time is charged to no context; each kernel counts its idle time, its slack time and its kernel time, published by `core_status`.
 
 #### One kernel per core
@@ -591,14 +592,81 @@ A `timer` is one deadline that, when it falls due, signals a `notify`. It is **i
 
 - `sched_configure` and `sched_set_cores` need the core capability of the kernel that holds the sched; admission is per kernel.
 - `sched_bind` needs the sched and the thread to belong to the same kernel, and `timer_set` the timer and the notify (rules of the calls above). Why: an interrupt never sends a message between kernels, and no lend crosses kernels.
-- **A lend exists only inside one kernel.** A call delivered by another kernel brings no lend. The multi-core part must say what a passive receiver does with such a call; the recommendation is that the placement service avoids it (a service has a thread per core, D-028), and that the call is then delivered and the receiver marked, by the same rule as a caller without a context.
+- **A lend exists only inside one kernel.** A call delivered by another kernel, through a proxy ([Calls on an object of another node](#calls-on-an-object-of-another-node)), brings no lend: a passive receiver gets it and is marked as having lost its context, by the same rule as a caller without a context. The placement service avoids it (a service has a thread per core, D-028).
 
-**What a move of a thread between kernels needs from this group** (the protocol itself is the multi-core part's):
+**What a move of a thread between kernels needs from this group** (the call is `thread_move`, [Unlike cores](#unlike-cores)):
 
 - The context must be movable: its chain empty and its holder its home (no lend crosses kernels). Its state is plain values: *B*, *T*, class, cores, *r*, *d* or its replenishment instant, consumed. The instants are values of the common clock, so they keep their meaning on the other core.
-- The source kernel takes the context out of its queues (one step) and its bandwidth out of its sum; the destination admits it, and may refuse with `budget` as `sched_configure` does. The destination must be in the context's cores set.
+- The source kernel takes the context out of its queues (one step) and its bandwidth out of its sum; the destination admits it, and may refuse with `budget` as `sched_configure` does. The destination's own core must be in the context's cores set, and its kind must have the features and the vector length of the thread's mask (D-118).
 - Timers do not move with a thread: they are not bound to threads. A thread that moves keeps the timers it set on the old kernel, which signal notifies on that kernel.
-- **Parked nodes (D-108).** A node parked on another core keeps its own queues and its own sum; the guarantees of admission hold for parked nodes only if the core that runs them gives each node its share. The parking protocol must therefore park only nodes whose sums add up to at most one core, and run them by the same order of deadlines; this is the multi-core part's.
+- **Parked nodes (D-108).** A node parked on another core keeps its own queues and its own sum; the guarantees of admission hold for parked nodes only if the core that runs them gives each node its share. So `core_place` refuses with `budget` a core whose nodes' sums would exceed one core, and refuses a core whose kind lacks a feature or a vector length of the node's own kind ([Cores](#cores)); the core runs its nodes by the same order of deadlines, the earliest deadline among the nodes first.
+
+#### Unlike cores
+
+**Proposed (D-115 point 2, D-118), 16 November 2026: written, no reference model yet, not reviewed.** A machine may have cores that differ in speed, in energy, in instruction-set features and in vector length. The kernel describes each core with numbers and hides nothing (D-115), keeps every thread's register state valid wherever it runs, counts on demand what a context did, and passes on what only the kernel can read. It decides nothing about where work goes: the placement service decides, from these inputs. The rules are the same on the three architectures; the architecture layer gives the bit lists and the registers.
+
+##### Kinds
+
+- **A kind is a set of cores that report the same identification and the same features.** At machine start-up the kernel starts every core long enough to read them: on x86-64 the CPUID leaves 0x1, 0x7, 0xD and 0x1A and the performance-capability register; on ARM64 `MIDR_EL1`, `MPIDR_EL1` and the `ID_AA64*` registers; on RISC-V the hart's ISA string given by firmware and `vlenb`. Kinds are numbered from 0 in the order of their first core in the core list. Two cores that differ in any feature, in the vector length, or in an identification word are of different kinds.
+- **The identification of a kind** is up to three raw words, copied as read (x86-64: CPUID.1.EAX and CPUID.1AH.EAX; ARM64: `MIDR_EL1`; RISC-V: `mvendorid`, `marchid` and `mimpid` as firmware gives them). The kernel gives them no meaning.
+- **Hardware threads of one physical core** are not separate entries: the core list has one entry per physical core, with its number of hardware threads (D-028: the second one stays idle).
+
+##### Features and vector length
+
+- **A feature is one bit of a 64-bit word whose list is fixed per architecture in `abi/`.** Bits 0 to 31 are **state features**: they add registers that the kernel must enable, save and restore. Bits 32 to 63 are **instruction features**: they add instructions and no register. A feature that is not listed is neither used nor reported by the kernel. State feature bit 31 is reserved on every architecture for processor-delivered user interrupts ([User interrupts](#user-interrupts-a-placed-hook)).
+- **One vector length per kind (D-118).** For each state feature that has a length (ARM64 SVE and SME, RISC-V V), the kernel uses one length per kind: the longest length every core of the kind supports, which on ARM64 it sets on each core of the kind. The length is published per kind. Applications never see it: WebAssembly vectors are 128 bits.
+- **Baseline and optional state features.** A state feature that the kind of a node's own core has, and that the architecture layer does not list as *large*, is **baseline** on that node: it is enabled for every thread of the node. Every other state feature is **optional**: a thread may use it only if its feature mask holds it. Large features are always optional (x86-64 AMX; ARM64 SME). Instruction features are never in a mask.
+
+##### The feature mask of a thread
+
+- **A thread has a feature mask** (64 bits): bits 0-30 the optional state features it may use; bit 31 user interrupts (reserved); bits 32-47 the vector length in bytes it uses, which must be the length of the node's own kind when the mask holds a feature with a length, and 0 otherwise; bits 48-63 are 0.
+- **The mask is given at creation: it is the size argument of `untyped_retype` for a thread** (it was 0). Judged with the size argument ([Order of checks](#order-of-checks), item 3), in this order: a bit 48-63 set, a bit that names no listed state feature, a length that is not 0 without a feature that has one, or a length of 0 with such a feature, is `invalid`; bit 31, a feature that the node's own kind does not have, or a length other than the kind's, is `unsupported`. A bit for a baseline feature is accepted and has no effect.
+- **The size of a thread** is the smallest power of two at least 1 KB + the baseline bytes of the node's kind + the bytes of each optional feature of the mask on that kind, all published in the entries `Kinds` and `Features`. The entry `ObjectSizes` gives the size for mask 0. **Why the mask fixes the size (design choice):** the kernel has no heap, so the save area is paid for when the thread is made. The alternatives were an allocation at first use, as Linux does for AMX and SVE, which rule 3 forbids, or the area of every feature for every thread (AMX and SME at their longest are hundreds of KB).
+- **`thread_set_features` changes the mask of a suspended thread and resets its vector state (D-118).** The new mask must fit in the area the thread was made with.
+
+| Call | Arguments | Result | Rights and rules |
+|---|---|---|---|
+| `thread_set_features` | thread, mask | | `manage` on the thread. The mask is judged as at creation (`invalid`, then `unsupported`). State, in order: `busy` if the thread is not suspended, or waits; `no_memory` if the save area the mask needs is larger than the one the thread was made with. Effect: the mask is replaced and the whole vector state is set to its initial state (x86-64: as after FNINIT, with MXCSR 0x1F80), the baseline included. Constant work |
+
+- **What a core enables for a thread.** On a core, the kernel enables the baseline of the thread's node, plus the optional features of the thread's mask, and nothing else; it saves and restores exactly that set, so the layout of the area is the same on every core where the thread runs. x86-64: an optional feature that the extended feature disable register covers (AMX) is disabled through it; any other through XCR0, written at a switch between two threads whose enabled sets differ. ARM64: through `CPACR_EL1`. RISC-V: through `sstatus.VS`.
+- **Using a feature that is not enabled for the thread raises the fault *undefined instruction*** (kind 2), with word 4 = 1 + the feature's bit when the trap names the feature, and 0 when the core does not have the instruction at all. The kernel never emulates an instruction. A handler that receives kind 2 with word 4 = 0 on a thread that runs correctly elsewhere asks the placement service to move it: *fault-and-migrate*, done in user space.
+- **Where a thread may run (D-118: the one placement rule the kernel enforces).** A thread runs only on its node, and a node runs on its own core or is parked on a core whose kind has every feature, state and instruction, of the node's own kind, with the same vector lengths ([Parked nodes](#one-kernel-per-core)). So a thread never meets a core that lacks a feature of its mask. A thread goes to another node only by `thread_move` (below), which refuses a destination whose kind lacks a feature or the length of its mask.
+- **Instruction features are not enforced for threads.** The kernel cannot know which instructions a thread's code holds. The compile service generates code for the features common to the kinds of the thread's cores set, and the placement service keeps the thread inside that set.
+
+##### What the kernel publishes about the cores
+
+Fixed for a boot, in the machine table and the start-up page:
+
+- **Per core** (`StartCore`): its hardware identifier, the slot of its node's `core` capability, its kind, its fence class ([The fence](#the-fence-stopping-a-core)), whether firmware booted it, its number of hardware threads, its package, and three raw performance values, 0 where the architecture has none: the highest and the most efficient performance level of the performance-capability register (x86-64 `MSR_HWP_CAPABILITIES`, or the AMD CPPC capability register), and the power-efficiency class of the core's MADT GICC entry on ARM64. These differ between cores of one kind.
+- **Per kind** (`StartKindRecord`, 56 bytes): its features (u64), its baseline mask (u64), its identification words (three u64), its number of cores, its vector length in bytes (0 if none), its baseline bytes, reserved (u32 each); and in the entry `Features`, the save-area bytes of each state feature.
+- **Not published by the kernel (design choice):** caches and clusters, frequency domains, NUMA proximity, idle and power states, and capacity or efficiency figures of firmware. The platform service reads them from firmware and gives them to the placement service. Why: the kernel needs none of them to keep any rule, and reading them would put more firmware parsing in the kernel, against D-054.
+
+Changing at run time:
+
+- **The current performance capabilities** of a node's core are returned by `core_status` ([Cores](#cores)).
+- **The hardware feedback table** (Intel HFI, with the Thread Director classes when present) is kept memory, one per package, sized at start from CPUID (rule 3). The kernel points the processor at it and enables it before the first process. A kept frame over it, `read` and `derive` only, is in every start-up space. The processor writes it; the kernel never does. Where the architecture or the processor has no such table, there is no frame.
+- **A change is signalled as an interrupt.** Source kind 3, *core event*, is claimed through the `irq_control` of the node whose core it concerns, like any vector ([Interrupts](#interrupts)): bits 0-7 the kind 3, bits 8-15 the event (1: the feedback table or the performance capabilities of the node's core changed), every other bit 0. It is an edge source. On an architecture or a processor without such an event, `irq_claim` with kind 3 is `unsupported`.
+
+##### Scheduling contexts on unlike cores
+
+- **Budgets and periods are nanoseconds of the core the context runs on, and the kernel scales nothing (design choice, the Decided "budgets are counted in time").** Admission stays per node, in time: *B* nanoseconds in each *T*, whatever the core. Why: there is no single speed ratio between two kinds (it depends on the code); a guarantee in work would depend on a number that changes with temperature; time is invariant under frequency changes. The alternative, budgets normalised to work by a scale per core (Linux `SCHED_DEADLINE`, Zircon), gives a guarantee only as good as the scale.
+- **Instructions retired, on demand (D-118 point 2).** `sched_count` turns on, for one context, the count of the instructions retired while it runs, in user and kernel mode, charged at the same events as its time; `sched_read` returns it as a fifth result. Counting is off by default, and the kernel reads the counter at a switch of contexts only when the context that stops or starts is counted. Where the processor classifies the running code (x86-64: Intel Thread Director, AMD's workload classification), the kernel also reads the class when a counted context stops running, records it in the context, and resets the processor's history; `sched_read` returns it in bits 8-15 of the state word, as 1 + the class, or 0. The speed of each kind of core is evaluated outside the kernel, once per processor model, and is the default; the count is for the contexts the placement service asks about. The architecture layer names the counter it uses (x86-64: a fixed instructions-retired counter of the performance monitoring unit; RISC-V: `instret`); where it has none, the count reads 0.
+
+| Call | Arguments | Result | Rights and rules |
+|---|---|---|---|
+| `sched_count` | sched, core, mode | | `manage` on the sched, `write` on the core, which must name the node that holds the sched (`invalid`, judged right after its three checks). Mode 0 off, 1 on (`invalid` otherwise). No state error. Turning it on when it is on, or off when it is off, changes nothing; turning it off sets the count and the class to 0. Constant work |
+| `thread_move` | thread, destination thread, destination sched, core, budget, period, class | | Below |
+
+**`thread_move`: a thread goes to another node (design choice).** A thread object never changes node: its memory belongs to the node that made it. A move is a transfer of the whole state of a thread into a thread made beforehand on the destination node, in one call. Why: a slot never names a slot of another node, and a thread whose object lies in another node's memory could only run through a grant of kernel memory. The alternative, a forwarding object on the source node, makes every call on the thread a message between kernels for the rest of its life.
+
+- **Checks,** in the order of [Order of checks](#order-of-checks): the thread (`manage`); the destination thread (`manage`; `invalid` if it belongs to the thread's own node, judged right after its three checks); the destination sched (`manage`; `invalid` if it does not belong to the destination thread's node); the core (`write`; `invalid` if it does not name the destination node). Then the plain arguments: budget, period and class all 0 (the context keeps its own), or the rules of `sched_configure` (`invalid`). Then the state, in order: `busy` if the thread is not suspended or waits; `busy` if it has no own context, or its context is not configured, or has lends; `busy` if the destination thread is not suspended, waits, has a context, or has a feature mask other than the thread's; `busy` if the destination node's own kind lacks a feature of the mask, or its vector length (D-118); `busy` if the destination node's own core is not in the context's cores set (D-040); `busy` if the destination sched is configured or has a home; `budget` if admission on the destination node fails with the bandwidth it will have.
+- **Effect.** The caller waits in *waiting for another node* while the two kernels exchange the state. The destination thread gets the registers, the vector state, the *cancelled up to* word, and the thread's effective marks in its own marks word (and, if it is attached to a task, in the task's marks, as `task_attach` adds them), so no mark is lost. The destination sched gets the parameters (the given ones, or the context's), its class and cores set, *r* = min(*r*, *B*), the deadline or the replenishment instant, the count of consumed time and its counting mode; it is configured and admitted on the destination node, and bound to the destination thread. The thread keeps its bindings, stays suspended, and its own context is unbound and made not configured, so it cannot run; its registers are set as for a new thread and its vector state to its initial state. The destination thread stays suspended: its bindings (a capability space, an address space of the destination node, a fault endpoint, a message page) are the caller's to make before it resumes it.
+- **Bound.** Constant work on each node, and one exchange whose size is the register block and the save area.
+- Lends are unchanged: a lend never crosses nodes, so a passive server always runs on the core of the client whose context it uses.
+
+##### What stays in the placement service
+
+Which kind each context goes to; the cores set of each context; the budget each context gets on each kind; when to move a thread; when to park a node; how to use the feedback table and the classes; which clusters, frequency domains and NUMA nodes exist; frequency preferences; and the interference between threads that share a cluster's cache or matrix unit. The kernel holds no capacity scalar and no energy model.
 
 ### Interrupts
 
@@ -864,6 +932,249 @@ flowchart TD
 
 Known limit, as in every information-flow system: timing and other covert channels are not covered.
 
+### Cores
+
+**Proposed (D-115 point 3, D-116, D-117), 16 November 2026: written, no reference model yet, not reviewed.** It covers the machine objects `core` and `role`, the membership of nodes (how the live nodes agree that a node is dead, how its core is stopped, the order isolate, reset, reclaim, reload), the roles that replace privileged nodes, and the calls `core_start`, `core_stop`, `core_status`, `core_idle`, `core_watch`, `core_place`, `role_claim` and `role_hand`. The rules of the sections above apply: order of checks, dying objects, bounded calls. On one core there is one node, always live: every role is held by node 0, `core_stop` is always `busy` (it would leave no live node) and `core_start` is always `busy`; the reference model takes the number of nodes as a parameter.
+
+The central rule is the one of clusters, brought inside one machine: **suspicion is cheap and can be wrong; nothing a node held is reused until its core is stopped.** A node is declared dead only after its core is stopped, so a false suspicion costs a node, never safety.
+
+#### Machine objects
+
+- A `core` names one node, by its index. A `role` names one role ([Roles](#roles)). An `iommu` names one IOMMU unit. These three are **machine objects**: made by the kernel at machine start-up, never from an untyped, never destroyed, held by no node. Their state is in the machine table. `untyped_retype` never makes them (`invalid`).
+- **A machine object has one root capability in the start-up space of every node (design choice).** Removing such a root removes its descendants and destroys nothing. A node started fresh gets new roots. Why: a machine object must outlive any node, so it cannot live as long as one root held by one node, the rule of every other object. The cost: *n* `core` roots in each of *n* start-up spaces, 64 bytes each (1 MB at 128 nodes). The alternative, one `machine` capability and a call that derives the `core` of an index, costs one more call and kind.
+- **Rights on a `core`:** `read` for `core_status` and `core_watch`; `write` for `core_idle`, `sched_count`, and, as before, to configure the scheduling contexts of that node; `manage` for `core_start`, `core_stop` and `core_place`; `send` to use it as the endpoint of `call` or `send` (the mailbox, below). **On a `role`:** `manage` for `role_claim` and `role_hand`; the role word itself is read in slot 13. **On an `iommu`:** `manage` to attach devices of its unit, as before.
+- **The mailbox of a node (design choice).** Each node has a mailbox endpoint, made at its start-up from no untyped; its capability with `recv` is in slot 15 of its start-up space. `call` and `send` accept a `core` capability with `send` in place of an endpoint: the message goes to the mailbox of that node's current generation, and the call is `gone` if the node is not live. The receiver sees badge 0 and the sender's stamp, whose task identifier carries the sender's node. This is the only reference that follows a node across its generations; it is how the first services of the nodes find each other at machine start and after a reload. The alternative, capabilities to every other node's mailbox made at each start, leaves a reloaded node unreachable until someone hands its new mailbox around.
+
+#### The states of a node
+
+Each node has a **member word** in the living part of the machine table:
+
+| Bits | Content |
+|---|---|
+| 0-3 | state: 0 dead, 1 starting, 2 live, 3 sealing, 4 sealed, 5 fencing, 6 fenced, 7 unfenced (8-15 never written) |
+| 4-6 | evidence of the last accusation: 0 none, 1 self, 2 stale, 3 stuck, 4 kill, 5 retire, 6 host |
+| 7-15 | 0 |
+| 16-31 | driver: the node that drives the fence, 0xFFFF for none |
+| 32-63 | generation |
+
+| State | Meaning | Its core | Its objects | Its roles |
+|---|---|---|---|---|
+| **dead** (*g*) | Generation *g* is over and fully reclaimed. Generation 0 means never started | Parked, or never started | None: references to generation *g* are `gone` | None names it |
+| **starting** (*g*) | Being built: start-up state, first thread | Running | Being made | None yet |
+| **live** (*g*) | Normal | Running | Valid | May hold roles |
+| **sealing** (*g*) | A planned stop is in progress (`core_stop` mode seal) | Running | Valid | Handing its unit roles over |
+| **sealed** (*g*) | Stopped cleanly, its block sealed; it can be resumed with the same generation, on the same or another core | Parked | Kept, frozen | Keeps its reserve and plain roles; holds no unit role |
+| **fencing** (*g*) | Accused with evidence; its core is being stopped | Unknown | Frozen for others: references are `gone` | Kept until fenced |
+| **fenced** (*g*) | Its core is confirmed stopped; every live node is reclaiming | Stopped | Being reclaimed | Unit and plain roles are taken over; reserve roles wait for dead |
+| **unfenced** (*g*) | The stop was not confirmed within `FENCE_NS` | Possibly running | Its own memory and the frames granted to it are never reused until the machine restarts | Unit roles taken over after `FENCE_NS` (below) |
+
+The only transitions, each one compare-and-swap through the writing node's gate, which checks the condition of the last column first:
+
+| From | To | Made by | Condition the gate checks |
+|---|---|---|---|
+| dead (*g*) | starting (*g* + 1) | the node that calls `core_start` mode fresh | No role word names the node; the core it is placed on is usable and runs no node |
+| sealed (*g*) | starting (*g*) | the node that calls `core_start` mode resume | The core it is placed on is confirmed parked or runs no node |
+| starting (*g*) | live (*g*) | the node itself, at the end of its start-up | — |
+| live (*g*) | sealing (*g*) | the node that calls `core_stop` mode seal | At least one other node is live |
+| sealing (*g*) | sealed (*g*) | the node itself, as its last write before it parks | No role word names it as the holder of a unit role |
+| starting, live, sealing, sealed (*g*) | fencing (*g*) | any live node, with evidence | The evidence holds; at least one other node is live (except for evidence self) |
+| fencing (*g*), driver *D* | fencing (*g*), driver *E* | *E*, a live node | *D* is not starting, live or sealing |
+| fencing (*g*) | fenced (*g*) | the driver | The stop is confirmed ([The fence](#the-fence-stopping-a-core)) |
+| fencing (*g*) | unfenced (*g*) | the driver | `FENCE_NS` has passed since the first action of the fence without confirmation |
+| unfenced (*g*) | fenced (*g*) | any live node | The stop is confirmed after all |
+| fenced (*g*) | dead (*g*) | any live node | The reclaim barrier holds ([The reclaim barrier](#the-reclaim-barrier)) |
+
+- Nothing goes back to live from fenced, unfenced or dead except through dead and a fresh start with a new generation, and nothing starts a node that might still be running. A sealed node does not beat, so only the evidence kill, retire and host can accuse it.
+- **A node's own gate stops it** ([The write gate](#the-write-gate)): every write through it reads the node's own member word first, and refuses unless the node is starting, live or sealing with its generation. A node that hung and wakes after its accusation can then change no shared word, take no memory, write no remapping entry and map no unit; it can still write what its page tables already reach, which is why the barrier waits for the stop.
+- **Why a word per node and not a log of events (design choice).** The member word is the whole truth about a node: any node, user space included, decides from the current words alone, never from a history it might have missed. The alternative, a membership service with views, needs every node to agree on a sequence of views.
+- Generations are compared for equality only, so their wrap-around after 2^32 starts of one node is harmless.
+
+#### Beacons and what each node publishes
+
+- **A core beacon** is one page per physical core, written only by that core: `heartbeat`, a counter written at the exit of every kernel event of the core; `idle_until`, the instant of its next armed timer when it goes idle (the largest value if none), so a core does not have to beat while idle; `running`, the index of the node whose block it runs (0xFFFF while it switches between parked nodes); `vmx` (x86-64), set while the core is in VMX root operation; `parked`, the fence epoch written by the park stub, never by a kernel.
+- **A node beacon**, written only by the kernel that runs that node: `panic`, 0 or the code of a failure the node found in itself, with its generation; `save_seal`, written last when a parked node is saved and cleared first when it is loaded (a node whose seal is valid was not running); `acked[n]`, for each node *Y* the generation of *Y* whose reclaim this node has finished; `maps_of`, *n* bits, bit *Y* set through the gate before this node makes its first translation (CPU or DMA) to memory owned by *Y*, cleared when it acknowledges *Y*; `observations[8]`, written by the gate only (below); the counters of idle, slack, kernel and recovery time that `core_status` returns.
+- **Size.** For *n* nodes: *n* core beacons of one page, and *n* node beacons of one page plus 8*n* + *n*/8 bytes rounded up to pages: about 1 MB for 128 nodes on the reference machine. All of it is kept at machine start and never grows (rule 3).
+
+#### Detection: evidence, not opinion
+
+A node is accused only with **evidence that any other node can check in shared memory**. The accuser needs no one's agreement: the gate checks the evidence when it makes the compare-and-swap. A kernel that is wrong cannot accuse a healthy node, because the evidence would not hold.
+
+| Evidence | Holds when | Who looks |
+|---|---|---|
+| **self** | The node beacon of *X* has `panic` ≠ 0 with *X*'s generation. *X* writes it when it finds a failure in itself (a kernel assertion, a double fault, an unexpected exception in kernel mode, an uncorrected hardware error on its core), sends an interrupt to the next live node, and parks itself | Every node, at the interrupt or at its next look |
+| **stale** | The gate recorded an observation (*X*'s core, heartbeat value *h*, instant *t*), and now the heartbeat still reads *h*, now − *t* ≥ `STALE_NS`, and now > `idle_until` + `STALE_NS` | A node that waits for *X*; the sweep |
+| **stuck** | The gate recorded an observation (ring *Y* → *X*, consumer index *c*, instant *t*) taken when the ring was not empty and after *Y* sent *X* an interrupt, and the consumer index still reads *c* with now − *t* ≥ `STUCK_NS` | A node with a message waiting in a ring to *X* |
+| **kill** | `core_stop` mode kill, with `manage` on *X*'s `core` capability | The caller's kernel |
+| **retire** | `core_stop` mode retire, or *X* reported a hardware fault of its core; the core is marked unusable | The same |
+| **host** | *X* was placed on a core whose stop was decided for another node, and *X* was running there or its save seal is invalid | The driver of that fence |
+
+- **A node is judged only when someone needs it.** A thread that waits for *X* (a call to an object of *X*, an acknowledgement of a core group, a request to a role *X* holds) makes its kernel observe *X*; an idle *X* that owes nothing is never woken. So cores sleep (D-108) without heartbeats every millisecond.
+- **The sweep.** To find nodes that died silently while nobody needed them, every live node also observes its two successors among the non-dead nodes, in cyclic index order, every `SWEEP_NS`; a successor that is idle with no armed timer is sent an interrupt and a ping message, which becomes stuck evidence if it is not consumed.
+- **Observations** are written by the gate only, at most 8 open per node, stamped with the clock, and expire after 4 × `STALE_NS`; a node cannot invent an old observation.
+- **A slow but healthy node may be fenced:** a firmware stall longer than `STALE_NS`, hard throttling, a long run of interrupts. That costs the node and its processes, never safety. `STALE_NS` must therefore be well above the longest stall that the reference machines show (to measure).
+- **Why no vote (design choice).** A vote protects against a node that lies about what it sees. Here what is seen is in shared memory and checked by the gate, so one accuser with valid evidence is enough, and the last two nodes of a machine can still recover each other; with a vote, the last live node could recover no one.
+
+#### The fence: stopping a core
+
+**D-117 point 1: the cheapest sufficient mechanism of each architecture, with no cost at run time.** The **driver** is the node that made the accusation. It runs the fence in its recovery reserve (below), in steps; every step is idempotent, and any live node replaces a driver that is no longer live. Let *p* be the physical core that runs *X*.
+
+- **x86-64.**
+  1. Send an NMI to *p*. If *X*'s kernel can still run its NMI handler, the handler sees its member word in fencing, writes what it can of its crash record ([The crash record](#the-crash-record)), leaves VMX root operation if it is in it, and stops in a loop with interrupts masked. Wait at most `NMI_GRACE_NS`.
+  2. Send INIT to *p*, unless *p* is the core firmware booted (the bootstrap processor): on that core INIT makes it run firmware's boot code again ([Linux commit e1c467e69040](https://github.com/torvalds/linux/commit/e1c467e69040), cited in the recovery draft). **The bootstrap core is stopped by the NMI of step 1 alone**: its own kernel's handler parks it. INIT is blocked while a core is in VMX root operation and held while it is in SMM (recovery draft, part 1.4, with its sources).
+  3. Send SIPI, twice, 200 µs apart, with the vector of the **park stub**, a page of kept memory below 1 MB.
+  4. The park stub sets machine checks enabled, installs vectors for NMI and machine check that halt, writes the fence epoch into `parked` of the core beacon, and halts with interrupts masked. A core never stays waiting for a SIPI after an INIT: machine checks are broadcast and a core with them disabled would shut the machine down (recovery draft, part 1.4).
+  5. **Confirmed** when `parked` holds the epoch. **Also confirmed**, on a core other than the bootstrap core, `SETTLE_NS` after INIT was sent while `vmx` was clear.
+  - Whether clearing the bootstrap flag after start-up removes the exception of step 2 is a trial on the reference desktop (D-117; [Open points](#open-points)).
+- **ARM64.** No standard call lets one core stop another; the stop is delivered at a priority the dying kernel cannot mask, where firmware gives one, and executed by its own handler. (1) Signal *p* with SDEI event 0 (`SDEI_EVENT_SIGNAL`) where firmware offers SDEI, every node having registered its handler and unmasked its core at start; otherwise an interrupt at NMI priority (the architectural NMI, or a priority-masked interrupt: the kernel then never masks interrupts with PSTATE.I outside its entry and exit). (2) The handler calls PSCI `CPU_OFF`. (3) **Confirmed** when PSCI `AFFINITY_INFO` for *p* returns OFF. A core that hosts a resident Trusted OS refuses `CPU_OFF`; its handler parks in a loop and writes `parked`, which is confirmation by the dying kernel's own code.
+- **RISC-V.** Where the firmware offers the DodOS extension `fence_hart`, the machine mode of *p* stops it whatever the supervisor mode masks: a forced stop, **confirmed** by the extension's answer. Otherwise: an interrupt to *p*, whose handler calls SBI `sbi_hart_stop`, **confirmed** when `sbi_hart_get_status` returns STOPPED.
+- **Fence classes.** Each core has a fence class in the fixed part of the machine table, published in `StartCore`: **2, forced** (another core stops it whatever its kernel does: x86-64 cores other than the bootstrap core while not in VMX root operation; RISC-V harts with `fence_hart`; every core under the hardening monitor); **1, signalled** (a signal its kernel cannot mask, a stop by its own handler, a confirmation by hardware or firmware: the x86-64 bootstrap core and cores in VMX root operation, ARM64 cores, RISC-V harts without the extension); **0, cooperative only** (the ARM64 core of a resident Trusted OS).
+- **After a confirmed stop**, for every node *Z* placed on *p*: if *Z* is not *X* and its save seal is valid, *Z* becomes sealed (it was parked, not running: [containment is per node](kernel.md#nodes-cores-and-load)); otherwise *Z* is accused with evidence host and becomes fenced in the same step.
+- **An unfenced node (the residue of D-116, bounded by D-120).** Its core may still execute. By [the gate over page tables](#the-gate-over-page-tables), every translation it can use leads only to its own memory, to frames granted to it, to the global read-only set and to its own devices, and its own gate refuses every shared write once its member word is not live. So: its own memory and the frames granted to it are not reused until the machine restarts; its devices are blocked by the unit role holders (blocking DMA needs no stop); its unit roles are taken over by their successors `FENCE_NS` + `SETTLE_NS` after the first fence action (design choice: the gate maps a unit's registers only in the view of the holder named by the role word, so an unfenced holder can no longer reach them through the gate; what remains is a wild jump into the middle of the gate, accepted as improbable for a bug); its other roles move as after a stop. The driver keeps trying every `SWEEP_NS`; a late confirmation moves it to fenced. On the reference desktop this happens only for a kernel on the bootstrap core too damaged to run its NMI handler (D-117), or for a core in VMX root operation. Not covered: a core whose hardware computes wrongly; ARM64 machines without SDEI where the handler cannot run.
+- **The hardening monitor (D-117 point 3).** An image may declare a small monitor at the level made for hypervisors (VMX root, EL2, HS-mode), which stops any core whatever its kernel does and can hold the gate. It is an optional layer: **the contract is the same with or without it**; it only makes every core of fence class 2. The kernel keeps the hooks that cost nothing: the gate is a call, the kernel maps its memory by range and never by a direct map of all memory, and one function sends an interrupt to another node.
+
+#### Reclaim
+
+When a live node *Y* sees *X* in **fencing**, it does at once, in its own kernel, what needs no stop:
+
+- **R0.** It refuses every new message from *X* and every new request from *X* to a role *Y* holds. It ends with `gone` every wait of its threads on *X* (a call to an object of *X*, an acknowledgement of a core group that includes *X*), and keeps the requests aimed at a role *X* holds, to send them again once the role word names a live holder. A reference to *X*'s generation is `gone` from now on.
+- **R1.** If *Y* holds a unit role, it blocks *X*'s devices on that unit: it clears every context entry whose iospace root table lies in memory the ownership table gives to *X* or in *X*'s floor, clears *X*'s remapping entries on that unit (for an IOAPIC role, masks the inputs *X* claimed), and invalidates. Blocking DMA does not depend on *X*'s core.
+
+When *Y* sees *X* in **fenced** (or unfenced, for R2 to R5 only as far as they touch *Y*'s own memory), it finishes, in steps of its recovery reserve:
+
+- **R2.** It removes every translation it holds to memory of *X*: its remote capabilities of *X*'s grants, with their mappings (the invalidation of its own TLB, and of its iospaces through the unit role holders). It destroys its copies of the address spaces whose home is *X* (D-108: the process is lost with its home node); their threads on *Y* raise *no address space* when chosen.
+- **R3.** It frees the grants it made to *X*'s generation and drops the records of *X*'s use of them. The frames stay pinned (their memory does not return to their untyped) until *X* is dead, because *X*'s devices could reach them until every unit holder has blocked them.
+- **R4. Audit.** It checks that every ownership word covered by its own live blocks still reads taken by it with its generation, and that its map counts match its tables ([The gate over page tables](#the-gate-over-page-tables), G14). A mismatch is a violation of containment: the machine stops with a stop record.
+- **R5.** It clears `maps_of` bit *X* and writes `acked[X]` = *g* in its node beacon: that is its answer, a write to its own page, not a message.
+
+#### The reclaim barrier
+
+*X* (generation *g*) goes from fenced to dead when, for every node *Y* ≠ *X*:
+
+| State of *Y* | Required |
+|---|---|
+| starting, live, sealing | `acked[X]` = *g* in *Y*'s beacon |
+| sealed | `maps_of` bit *X* clear (a sealed node that maps *X*'s memory delays *X* until it is resumed, and acknowledges before it runs any thread, or killed) |
+| fencing, unfenced | `maps_of` bit *X* clear |
+| fenced | `maps_of` bit *X* clear, or every node that is starting, live or sealing has acknowledged *Y* |
+| dead | nothing |
+
+and no unit role is held by *X* or is handing to or from *X*. Any live node that sees the barrier hold makes the compare-and-swap; the gate checks it again (at most *n* beacons and the role table). In the same step the reserve roles held by *X* become vacant and the plain roles still naming *X* are vacated; every live node, when it sees *X* dead, unpins the frames of R3. **After dead**, every ownership word and device entry owned by *X* is free for any live node, and for *X*'s next generation ([Chunks, floors and the ownership words](#chunks-floors-and-the-ownership-words), rule 3 of taking).
+
+**Why a barrier per dependency and not a global round (design choice).** A global barrier delays every recovery by the slowest one; this one delays *X* only for the nodes that could still write into *X*'s memory, which `maps_of` records. Its cost is one bitmap per node and one gate write before the first remote mapping to a new peer.
+
+#### The recovery reserve
+
+Recovery is work in the kernel that is not a call: the driver's fence, every node's steps R0 to R5, the rebuild of a unit role, the requests of other nodes. It runs on an internal scheduling context of each node, the **recovery reserve**: bandwidth 1/64 of a core (2^26 in the units of [Admission](#scheduling-contexts)), period 10 ms, admitted in the node's sum from start-up, by the rules of [What runs next](#what-runs-next), in steps of at most 32 units. When there is no such work, its time is slack and goes to others. **Why a reserve (design choice):** recovery charged to whatever thread runs would break the guarantees of admission on every live node at the worst moment; the reserve keeps them, and a node admitted to the hilt still recovers its neighbour. The work of *Y* for *X* is bounded by what *Y* holds of *X*.
+
+#### Concurrency
+
+- **Nobody is designated.** Any live node with valid evidence accuses; one compare-and-swap wins. When a driver is no longer live, the first live node that notices takes the driver field and repeats the fence from step 1.
+- **Two nodes die at once.** Each is accused and fenced on its own; where `maps_of` links them, the row *fenced* of the barrier applies.
+- **A node dies during a recovery,** whatever its part: as driver (replaced), as a node that has not acknowledged yet (it leaves the set whose acknowledgement is required as soon as it is accused; its own `maps_of` bits count instead), as the successor of a role (the next candidate takes over).
+- **A node dies while starting:** accused with stale (no heartbeat within `START_NS`), fenced, reclaimed; its next fresh start has generation *g* + 2. **While sealing:** accused like a live node; the roles it had not handed over are taken over after the stop.
+- **All nodes but one die:** the last live node fences and reclaims all of them and holds every unit role. `core_stop` refuses to kill or seal the last live node (`busy`), so the last node is lost only by its own failure, and then the machine is lost.
+
+#### What user space sees, and the order of recovery
+
+- A node's watchers (`core_watch`, at most 4 per node) are signalled after every change of a member word or a role word that their node processes; they read slot 13. Every capability that names an object of *X*'s generation returns `gone` from the moment *X* is accused. A process whose home is *X* is lost; its threads on other nodes raise *no address space*.
+- **The order isolate, reset, reclaim, reload:**
+
+| Step | What | Who | Ends when |
+|---|---|---|---|
+| isolate | Accusation; DMA and interrupts of *X*'s devices blocked (R1); *X*'s core stopped | The kernel: the accuser drives, unit role holders block | *X* fenced |
+| reset | The core: as the fence. The devices: a reset at bus level before a new driver uses them | The kernel for the core; the platform service for the devices, after dead | Core parked; devices reset |
+| reclaim | R2 to R5 on every live node; roles taken over | The kernel, every live node, in its recovery reserve | *X* dead (barrier) |
+| reload | `core_start` mode fresh: generation *g* + 1, start-up state from *X*'s floor and the kept image | A supervisor | *X* live |
+
+- **The kernel never reloads a node by itself (design choice):** whether and when to restart a node, and with which first service, is a policy, and a node that fails repeatedly should stay dead or have its core retired. The machine stops only when containment is violated.
+
+#### The calls
+
+| Call | Arguments | Result | Rights and rules |
+|---|---|---|---|
+| `core_start` | core, mode, kernel image, module | | `manage` on the core. Mode 0 fresh, 1 resume. Kernel image 0 is the boot kernel, 1 the replacement slot. Module: for mode 0, the index in the kept image of the first service to run; for mode 1, 0 |
+| `core_stop` | core, mode | | `manage` on the core. Mode 0 kill, 1 seal, 2 retire |
+| `core_status` | core | member word, placement, idle, slack, kernel, recovery, performance | `read` on the core |
+| `core_idle` | core, table | | `write` on the core. The table travels as the message words of the call |
+| `core_watch` | core, index, notify | | `read` on the core, which must name the caller's node. Notify 0 unbinds |
+| `core_place` | core, physical core | | `manage` on the core |
+| `role_claim` | role | epoch | `manage` on the role |
+| `role_hand` | role, core | epoch | `manage` on the role. The core names the target node and needs no right; 0 vacates |
+
+Every call of the group checks in the order of [Order of checks](#order-of-checks): the capability the call acts on, the other capabilities, the plain arguments, the state.
+
+**`core_start`.**
+
+- Plain arguments, in order (`invalid`): the mode is 0 or 1; the kernel image is 0 or 1; for mode 0, the module is below the number of modules and is flagged as a first service; for mode 1, the module is 0.
+- State, in order: mode 0: `busy` if the node is not dead, then `busy` if the physical core it is placed on is marked unusable or runs a node that is not sealed; mode 1: `busy` if the node is not sealed or its core is not confirmed parked. Then `busy` if kernel image 1 is asked for and the replacement slot is empty.
+- Effect, mode 0: the member word becomes starting (*g* + 1). The caller's kernel starts the physical core (x86-64: a start request written in the park stub's page, then an NMI, which wakes the halted stub and sends it to the kernel's entry; ARM64: PSCI `CPU_ON`; RISC-V: SBI `sbi_hart_start`), in its recovery reserve, and the call returns. The node builds its start-up state from its floor and the kept image ([Start-up state](#start-up-state)) with generation *g* + 1, and its first thread runs the chosen module. A node that does not beat within `START_NS` is accused with stale.
+- Effect, mode 1: the member word becomes starting (*g*); the node is loaded from its sealed block, checks that the block's format version is one the kernel image reads, and becomes live with the same generation, its objects as they were. A version it cannot read makes it accuse itself (self): its objects are lost and it is reclaimed as after any failure. **Replacement of a kernel** is `core_stop` mode seal followed by `core_start` mode resume with kernel image 1.
+- Bound: constant work in the call, plus one start sequence of a physical core in the caller's recovery reserve.
+
+**`core_stop`.**
+
+- Plain argument (`invalid`): the mode is 0, 1 or 2.
+- State, in order: modes 0 and 2: `busy` if the node is dead, fencing, fenced or unfenced; mode 1: `busy` if the node is not live. Then, for every mode, `busy` if no other node would be live afterwards.
+- Effect, modes 0 and 2: the node is accused (evidence kill or retire) and the caller's node drives the fence. Mode 2 also marks the physical core that runs the node as unusable until the machine restarts. Stopping the caller's own node is allowed: the call returns, the node parks itself at the end of the event, and another live node drives the fence.
+- Effect, mode 1: the member word becomes sealing. The node hands each unit role it holds to its successor ([Roles](#roles)), finishes or refuses with `gone` the requests it serves, saves and seals its block, writes sealed and parks its core. Its threads, its memory and its plain and reserve roles stay.
+- The call returns `ok` when the transition is begun; its end is seen through `core_watch` and the member word. Bound: constant work and one message to each live node.
+
+**`core_status`.** No state error. Words of the result: 0 the member word; 1 the physical core the node is placed on (bits 0-31) and flags (bit 32 parked on a core that is not its own, bit 33 core marked unusable, bits 34-35 the fence class of that core); 2 to 5 the idle, slack, kernel and recovery time of the node in nanoseconds, as last published in its node beacon; 6 the current performance capabilities of the core it runs on, as the architecture reads them (x86-64: the performance-capability register), 0 where it has none. Constant work: it reads shared memory and sends no message.
+
+**`core_idle`.** The table travels as the message words of the call: at most 15 entries of 4 words, in order: exit latency (ns), minimum residency (ns), method in bits 0-31 and parameter in bits 32-63, flags. Methods: 0 the halt instruction; 1 x86-64 MWAIT, parameter the hint; 2 PSCI `CPU_SUSPEND`, parameter the power state; 3 SBI `sbi_hart_suspend`, parameter the suspend type. Flags: bit 0, the state loses the core's context; other bits 0. Plain arguments, entry by entry (`invalid`): the number of words is a multiple of 4 and at most 60; each latency and residency is below 2^63; exit latencies strictly increase; the method is one of this architecture's; reserved flag bits are 0. The table replaces the node's table ([Idle](#idle)); zero entries return the node to the halt instruction. On another node, the call becomes a message (rule 7). Constant work.
+
+**`core_watch`.** Order: the core (slot, kind, `read`, then that it names the caller's node, `invalid`); the notify if not 0 (slot, kind, `send`, then that it belongs to the caller's node, `invalid`); the index below 4 (`invalid`); the state: `busy` if the notify is not 0 and the index is bound. Effect: the notify is signalled, with the badge of its capability or bit 0, at least once after each change of a member word or a role word that the node processes. Notify 0 unbinds, and succeeds if the index is unbound. Destroying a notify unbinds it in the steps of its removal, after its irqs, one unit each.
+
+**`core_place`.** Plain argument (`invalid`): the physical core is below the number of cores. State, in order: `busy` if the node is not live or sealed; `busy` if the core is marked unusable; `busy` if the core runs a node that is not live; `busy` if the kind of that core lacks a feature or a vector length of the node's own kind ([Unlike cores](#unlike-cores)); `budget` if the sum of the admitted bandwidths of the nodes the core would run exceeds one core. Effect: the node is bound to that core in the machine table; a live node moves at its next event boundary, by the protocol of parked nodes; a sealed node is resumed there by `core_start` mode 1. The node rewrites the destinations of its remapping entries and asks the unit role holders to invalidate (at most 192 entries). Bound: constant work in the call.
+
+#### Roles
+
+A **role** is a duty that must have exactly one holder at a time. Importance belongs to a role, which any live node can take over, not to a node (D-115 point 3). Every role obeys three rules: one holder, recorded in the role word, changed only by compare-and-swap through the gate; nothing that cannot be rebuilt from the kept memory, the hardware and the reports of the live nodes (a new holder never reads the dead holder's memory as truth: D-107); a single writer by construction (a role moves by the holder's own last write, or after the holder's core is stopped, never by a timeout alone).
+
+- **The roles are fixed at machine start-up:** one **unit role** per IOMMU unit, per IOAPIC (x86-64), per GIC ITS and one for the GIC distributor (ARM64), and one for the console if the image declares one ([The console](#the-console)); the *k* **reserve roles**; and the **plain roles** the boot image names (at most 64: for example the leader of the supervisors, the leader of the memory services, the platform service). RISC-V interrupt controllers have registers with a natural single writer and need no role. Each role has a record in the fixed part of the machine table and a root `role` capability in every start-up space (entry `Roles`).
+- **The role word**, in the living part: bits 0-1 the state (0 vacant, 1 held, 2 handing); bits 2-17 the holder (for handing, the node that hands); bits 18-33 the target (handing only, otherwise 0xFFFF); bits 34-63 the epoch, one more at every change.
+
+| Kind | Who moves it | When it may change holder without the holder |
+|---|---|---|
+| **unit** | The kernel: planned by `role_hand`, after a death by the successor automatically | The holder is fenced or dead, and `SETTLE_NS` has passed since the stop was confirmed; or the holder is unfenced and `FENCE_NS` + `SETTLE_NS` have passed since the first fence action |
+| **reserve** | User space: `role_claim`, `role_hand` | The holder is dead |
+| **plain** | User space: `role_claim`, `role_hand` | The holder is fenced, unfenced or dead |
+
+- A unit role is never vacant (the last live node holds every unit role) and never held by a sealed node.
+- **The successor** of a unit role whose holder *X* is no longer live is the first node after *X* in cyclic index order among the live nodes whose core has the highest fence class found among live nodes. It is a function of the member table and the fixed part, so every node computes the same one. A node that holds a unit role never enters VMX root operation; it hands its roles first. **Why (design choice):** a role is only as safe as the stop of its holder, so unit roles go to cores of fence class 2 wherever the machine has them, and a machine where every core is class 1 (most ARM64 machines) still runs.
+- **Requests to a holder** carry the epoch the requester read; the holder refuses a request with another epoch (an answer between kernels that never reaches user space), and the requester reads the role word again and sends it to the holder it names. A request is held by the thread that waits for it (*waiting for another node*); requests are idempotent.
+- **Planned hand-over of a unit role *u* from *X* to *Y*** (by `role_hand`, or by *X* while sealing): (1) *X* stops accepting new requests for *u* and finishes those it began; (2) it waits until the unit's queue is drained (at most `IOMMU_WAIT_NS`; a unit that does not drain is a hardware fault of the unit); (3) it unmaps the unit's registers and tables through its gate and invalidates its own TLB; (4) it writes handing (*X* → *Y*, *e* + 1), its last act on *u*, and sends *Y* a message (the gate refuses if *Y* is no longer live; *X* then maps the unit again and stays the holder, and the call returns `busy`); (5) *Y* maps the unit through its gate, which allows it because the word names *Y* as target, checks the queue (drained, no error), and writes held (*Y*, *e* + 2). If *X* dies before step 4, the take-over applies; after step 4, *Y* completes step 5; if *Y* dies after step 4, the successor of *Y* takes over with a rebuild.
+- **Take-over after a death:** the successor *S* waits for the delay of the table above, writes held (*S*, *e* + 1) (the gate checks the holder's state), maps the unit and **rebuilds** it without reading anything of the old holder's: for an IOMMU unit, it drains the queue, asks every live node for its report on the unit (each iospace that serves devices of the unit: device, root table, domain number; each remapping handle it claimed), keeps the context entries that match, rewrites those that differ, clears those that no live node claims, rebuilds the map of domain numbers and invalidates the whole unit; for an IOAPIC, it compares each redirection entry with the lines the live nodes report and masks the inputs nobody claims; for the GIC distributor, it rewrites the configuration of every interrupt a live node reports; for a GIC ITS, it drains the command queue, issues again the mappings the live nodes report, then invalidates and synchronises; for the console, it takes over the cursors. Then it serves requests and acknowledges the reclaim of the old holder. Each report is bounded (one message per iospace, 192 handles per node), and the comparison is done in steps of the recovery reserve.
+- **Plain and reserve roles** move by one compare-and-swap; the call is the commit point, and user space on the old holder stops acting as holder before it calls. A reserve role cannot move while a word of its reserve is taken by a node that is not dead. **The supervisor and the memory service run on the nodes that hold the reserve roles**; they keep no state that only one replica has, a requirement on their design that the kernel cannot enforce.
+- **Why two nodes never hold a unit role at once.** A node maps a unit's registers only through its gate, and the gate maps them only while the role word names that node as holder or as target of a handing; the word has one holder; a planned hand-over unmaps before it moves; a take-over waits for a stop, or for the time after which the gate keeps an unfenced holder out; writes posted before the stop are covered by `SETTLE_NS` (that a stopped core's posted writes reach the device within that time is the one hardware assumption, to test).
+
+| Call | Rules |
+|---|---|
+| `role_claim` | A unit role is `invalid`, judged right after the three checks of its slot. State, in order: if the role is held by the caller's node, success with no change; `busy` if the role is held or handing and its holder or target is starting, live, sealing or sealed (for a reserve role: or fencing, fenced or unfenced); for a reserve role, `busy` also if a word of the reserve is taken by a node that is not dead. Effect: held (the caller's node, epoch + 1). Result: the new epoch. Constant work |
+| `role_hand` | For a unit role, core 0 is `invalid`, judged as the first plain check. State, in order: `busy` if the role is not held by the caller's node; if the target is the caller's node, success with no change; `busy` if the target is not live; for a unit role, `busy` if the target's core has a fence class below the best among live nodes or is in VMX root operation; for a reserve role, `busy` if a word of the reserve is taken. Effect: for a plain or reserve role, held (target, epoch + 1), or vacant for core 0; for a unit role, steps 1 to 4 of the planned hand-over, and the call returns once the word is handing. Result: the new epoch. Bound: constant work, plus for a unit role one wait for the unit's queue of at most `IOMMU_WAIT_NS` |
+
+#### Numbers
+
+Provisional, to measure; the boot image states the times in `BootMembership`, and the kernel refuses values outside the ranges.
+
+| Name | Value | Range or reason |
+|---|---|---|
+| `NODES_MAX` | 1,024 | Kept memory is *O*(*n*²) through `acked` (8 MB at 1,024) |
+| `STALE_NS`, `STUCK_NS` | 100 ms | 10 ms to 1 s; above the longest firmware stall of the reference machines |
+| `SWEEP_NS` | 1 s | 100 ms to 60 s; one wake-up per core |
+| `NMI_GRACE_NS` | 1 ms | Time for a crash record |
+| `FENCE_NS` | 10 ms | Time for INIT, SIPI and the stub, or for `CPU_OFF` |
+| `SETTLE_NS` | 1 ms | Writes posted by a stopped core reach their device |
+| `START_NS` | 1 s | Time for a started node to beat |
+| Recovery reserve | 1/64 of a core, period 10 ms | 156 µs of each 10 ms |
+| `CORE_WATCH_SLOTS` | 4 | The node agent and up to three supervisor replicas |
+| `IDLE_STATES_MAX` | 15 | Fits the 64 message words |
+| `OBSERVATIONS_MAX` | 8 | Open suspicions per node |
+| `RESERVES_MAX` | 8 | — |
+| `ROLES_PLAIN_MAX` | 64 | — |
+
+**What each node keeps** for this group, in its node block or its beacons, all fixed at start: its member word's last value seen, its core binding, its four watch slots, its idle table, its recovery reserve, its 8 observations, its `acked` array and `maps_of` bitmap, the list heads of its threads waiting for each node, and its write gate.
+
 ### Registers
 
 The tables above fix the arguments and results of each call. Which register or which field of the message page carries each one is defined by the architecture layer and published in the kernel-supplied code page (rule 6). It is not part of this contract.
@@ -992,12 +1303,13 @@ Provisional. Sizes are fixed per kernel version and published in the start-up pa
 | `endpoint`, `notify`, `reply`, `timer` | 64 bytes |
 | `sched` | 128 bytes |
 | `task` | 256 bytes |
-| `thread` | A fixed part of 1 KB, plus the vector state area, whose size is a value of the machine for the kind of core of the node that holds the thread; the sum is rounded up to a power of two. User space reads it in the entry `ObjectSizes` of the start-up page. The one-core reference uses the value of x86-64 with x87, SSE and AVX state and no AVX-512 state: the area is 832 bytes (the XSAVE size of those three components, `X86_XSTATE_AVX_SIZE` in [gdb's `x86-xstate.h`](https://gnu.googlesource.com/binutils-gdb/+/master/gdbsupport/x86-xstate.h)), so a thread is 1,856 bytes, rounded up to 2 KB |
+| `thread` | A fixed part of 1 KB, plus the vector state area, whose size is a value of the machine for the kind of core of the node that holds the thread and for the thread's feature mask ([Unlike cores](#unlike-cores)); the sum is rounded up to a power of two. User space reads it in the entries `ObjectSizes` (mask 0), `Kinds` and `Features` of the start-up page. The one-core reference uses the value of x86-64 with x87, SSE and AVX state and no AVX-512 state: the area is 832 bytes (the XSAVE size of those three components, `X86_XSTATE_AVX_SIZE` in [gdb's `x86-xstate.h`](https://gnu.googlesource.com/binutils-gdb/+/master/gdbsupport/x86-xstate.h)), so a thread is 1,856 bytes, rounded up to 2 KB |
 | `aspace`, `iospace` | Two pages (root table and header; 8 KB on the reference machine); lower tables of one page each are taken from the untyped the space was created from |
 | `cspace` | 64 bytes per slot, grown by supplying memory, plus the directory (8 bytes per 128 slots of the maximum) |
 | `frame` | Its pages (at most 512), and no kernel record: the capability slot holds the record. A frame follows the rules of an object in everything else (a root capability, memory given back to the untyped when it is removed) |
 | `irq` | An entry of the node's interrupt table, 64 bytes per claimable vector (12 KB per node on x86-64), kept at start-up; not made from an untyped |
-| `irq_control`, `iommu`, `memory_control` | Kernel memory kept at start-up; not made from an untyped |
+| `irq_control`, `memory_control` | Kernel memory kept at start-up; not made from an untyped |
+| `core`, `iommu`, `role` | Machine objects: kept at machine start-up, never destroyed |
 | Machine table | Kept: one ownership word (8 bytes) per chunk, 16 bytes per device entry, the gate words and page classes ([The gate over page tables](#the-gate-over-page-tables)), a member word per node, a role word per role, and per node `GRANTS` grant entries of 128 bytes, `GRANTS` use entries of 32 bytes and `PROXIES_PER_PEER` proxies for each other node |
 
 ### The capability slot
@@ -1031,15 +1343,17 @@ What depends on the kind:
 
 ## Start-up state
 
-**Proposed (D-110), 14 November 2026: written, no reference model yet, not reviewed.**
+**Proposed (D-110), 14 November 2026; revised 16 November 2026 (D-112 to D-121): written, no reference model of the revision yet, not reviewed.**
 
-The kernel of the boot core starts one process, the first service of the boot image, and gives it everything. No other authority exists in the system. The start-up state is determined entirely by three things, and no other value is chosen anywhere:
+The start-up state is determined entirely by three things, and no other value is chosen anywhere:
 
 - the machine: memory map, cores, interrupt controllers, IOMMU;
 - the boot image;
 - the memory the kernel keeps, which it publishes in the start-up page.
 
 The reference model takes the same description as input.
+
+**Machine start-up is a phase, not a node (design choice, D-115 point 3).** Firmware gives the machine to one core. Its kernel runs the **machine start-up**, then the **node start-up** of its own node, the same code that every other core runs for its node. After that, nothing in the machine depends on which core booted it: every node has the same start-up state, and every duty that needs one holder is a role ([Roles](#roles)). The alternative, a boot node that builds the first process and holds every authority, makes that node necessary to the machine (D-107, D-116).
 
 **What the loader hands over.** The loader is the part of the single signed EFI image that runs before the kernel. It hands over:
 
@@ -1052,29 +1366,41 @@ The reference model takes the same description as input.
 - the boot image, already in memory, as a list of **modules**:
   - first, the segments of the first service, each with its virtual address, its rights and its length; the loader has already filled in the file contents and zeroed the tail;
   - then the files of the other services of the boot image;
-  - the entry point of the first service, and the number of free tables its address space keeps in reserve.
+  - the entry point of the first service, and the number of free tables its address space keeps in reserve;
+- the records of the boot image that the kernel reads: `BootFloors` (`floor_node`, `reserve_bytes`, `reserve_per_gib`, the number of reserves *k*, the number of plain roles and their names) and `BootMembership` (the times of [Detection](#detection-evidence-not-opinion)), and the optional declarations (a console, the hardening monitor of [Stopping a core](#the-fence-stopping-a-core)).
 
-The loader lays out the modules in order, each on a page boundary, from a physical address aligned on 2^*k*. A module at least one large page long is aligned on the largest large page that is not longer than it; the image builder places a segment of that length so that its virtual address has the same alignment. Here *k* is the smallest number such that 2^*k* is at least the size of the modules plus 64 pages, the reserve for the start-up page and the message page. The kernel refuses to start, with a message on the serial console, if:
+The loader lays out the modules in order, each on a page boundary, from a physical address aligned on 2^*k*. A module at least one large page long is aligned on the largest large page that is not longer than it; the image builder places a segment of that length so that its virtual address has the same alignment. Here *k* is the smallest number such that 2^*k* is at least the size of the modules. The kernel refuses to start, with a stop record ([The crash record](#the-crash-record)) and, if the boot image declares a console, a message on it, if:
 
 - a segment of the first service lies below the first large page (2 MB on the reference machine) or beyond the user range end;
 - two segments overlap, or a segment's virtual address is not on a page boundary;
 - a segment is both writable and executable;
 - the start-up page would need more than 63 pages;
-- or the ordinary memory is smaller than one chunk per usable core, so that some node would get no share (rule 4).
+- the floors, the reserves and the kept memory do not fit in the ordinary memory (rule 4), or *k* is not between 2 and 8 (1 on a machine with one usable core), or a time of `BootMembership` is outside its range;
+- *E* would be more than 4,096 ([Values of the machine](#values-of-the-machine)), or the number of usable cores is more than `NODES_MAX` (1,024);
+- or the kept image's SHA-256 does not match the one the signed image carries.
+
+**The machine start-up**, in this order:
+
+1. reads the MADT and the DMAR (x86-64; the equivalent tables on the other architectures: [Architectures](#architectures)), and builds the fixed part of the machine table: the values of the machine, the core list, the floors, the reserves, the chunk geometry, the units, the IOAPICs, the role records, the kept image's place and SHA-256, the kernel image slots, the times of membership; it zeroes the living part, then writes every ownership word and device entry (rules 4 and 6), every member word (*dead*, generation 0) and every role word (below);
+2. turns every IOMMU unit on in blocking mode, programs the remapping table, and masks every IOAPIC input and the legacy PIC;
+3. writes the initial role words: unit role *j* held by node *j* mod *n* among the nodes whose cores have the best fence class ([Roles](#roles)); reserve and plain roles vacant;
+4. starts every other core long enough to read its identification, its features and its performance capabilities ([Unlike cores](#unlike-cores)) and, on x86-64, brings up every second hardware thread once and parks it ([The fence](#the-fence-stopping-a-core): a parked core keeps machine checks enabled), then starts every core for its node start-up;
+5. runs the node start-up of its own node.
+
+A failure during these steps is a failed boot.
 
 **Memory, by rule.**
 
-1. **Kept.** The kernel keeps: its image (the code page included), the block of the boot node, the machine table (below), the start-up objects that are made from no untyped (the start-up `cspace`, the tables of the start-up `aspace` and its reserve, the start-up `thread`, `sched` and `task`, the `irq_control` and the `iommu` objects), the interrupt table of the node, the interrupt remapping table, the tables of the IOMMU units, the clock page, its own stacks and page tables, and the register ranges of the local APIC, the IOAPICs and the IOMMU units. The kept ranges are listed in the entry `Kept`. Their size is the implementation's own, and publishing it is what lets the oracle rebuild the same state.
-2. **Image region.** This is the 2^*k* bytes that hold the boot image.
-3. **Ordinary memory.** This is the RAM that is usable after `ExitBootServices`: the UEFI types loader code and data, boot services code and data, and conventional memory. The kept ranges and the image region are taken out, and each range is shrunk inwards to page boundaries.
-4. **Chunks, floors and reserves (D-112, D-114).** Ordinary memory is cut into chunks; the parts of a range smaller than a chunk are kept by no one and given to no one (they are left out, as the image region is). Let *n* be the number of usable cores and *O* the ordinary memory in GiB. Every node's floor is `floor_node` bytes rounded up to a chunk; the *k* reserves are `reserve_bytes + reserve_per_gib × O` bytes rounded up to a chunk; the three numbers and *k* are stated by the boot image ([Memory and devices between nodes](#memory-and-devices-between-nodes)). Floors are taken in ascending address order, node 0 first, then the reserves in order. The kernel refuses to start if they do not fit. A floor never changes (D-107). Every other chunk has the word *free*, unclaimed. Floors and reserves are in the fixed part of the machine table; the ownership words are its living part. The image region belongs to the boot node, which is node 0, but it is not part of its floor: it is given once, as the image untyped (rule 5), and never cut into ordinary untypeds.
-5. **Untypeds of the boot node.**
-   - The **image untyped** comes first: one ordinary untyped of exactly the image region.
-   - Then each range of the boot node's floor, in ascending order, is cut into the fewest blocks that are each a naturally aligned power of two, of at least one page. At address *a*, with *L* bytes left, the block is 2^min(trailing zeros of *a*, floor(log2 *L*)) bytes.
-   - The other nodes' floors give no capability to the first process. The unclaimed chunks give none either: the first process takes them with `memory_take`. They become the untypeds of the start-up space of their node when that node is started (`core_start`, cores group).
-   - The clean mark of every start-up untyped is at its start, except the image untyped, whose clean mark is at its watermark ([rules of `untyped_retype`](#capabilities-and-objects)).
-6. **Device memory.** Every physical address below 2^MAXPHYADDR that is not ordinary memory, not in the image region, not kept, and not of the UEFI type unusable memory, is cut into blocks by the same rule. That includes MMIO, the framebuffer, the ACPI tables and NVS, firmware-reserved memory and the runtime services of UEFI. Each block is an entry of the device table, unclaimed; 8,192 unused entries follow. No device untyped is given at start-up: the node that will drive a device takes its entries with `memory_take` (D-113).
-7. **Rights.** Ordinary untypeds have every right, `exec` included: the first process hands that right to the compile service. The `memory_control` has every right, `exec` included, so that the blocks it takes can carry `exec`.
+1. **Kept.** The kernel keeps: its image and the slot for a replacement image (the code page included); the **kept image** (rule 2); the block of every node; the machine table, its fixed and living parts; the start-up objects of every node that are made from no untyped (the start-up `cspace`, the tables of the start-up `aspace` and its reserve, the start-up `thread`, `sched` and `task`, the mailbox endpoint, the `debug`, `ioports`, `irq_control` and `memory_control` objects); the machine objects (`core`, `iommu`, `role`); the interrupt table of every node; the interrupt remapping table; the tables of the IOMMU units; the hardware feedback tables ([Unlike cores](#unlike-cores)); the beacons of every node and core ([Beacons](#beacons-and-what-each-node-publishes)); the proxies; the clock page; on x86-64, the page below 1 MB of the park stub; the kernel's own stacks and page tables; and the register ranges of the interrupt controllers and of the IOMMU units. The kept ranges are listed in the entry `Kept`. Their size is the implementation's own, and publishing it is what lets the oracle rebuild the same state.
+2. **The kept image (design choice).** The image region, the modules of the boot image, is kept memory: read-only for every kernel and every process, never reclaimed, common to every node, with its SHA-256 in the fixed part of the machine table. It is given once, as kept frames (rule 5), and never as an untyped. Why: every recovery needs the code of the first service, of the supervisor and of the memory service from a place that no dead node could have written. The cost: the image's size is kept for the life of the machine. The alternative, an image untyped of one node that can be retyped once the boot image is deleted, is lost with that node.
+3. **Ordinary memory.** This is the RAM that is usable after `ExitBootServices`: the UEFI types loader code and data, boot services code and data, and conventional memory. The kept ranges are taken out, and each range is shrunk inwards to page boundaries.
+4. **Chunks, floors and reserves (D-112, D-114).** Ordinary memory is cut into chunks; the parts of a range smaller than a chunk are left out. Let *n* be the number of usable cores and *O* the ordinary memory in GiB. Every node's floor is `floor_node` bytes rounded up to a chunk; the *k* reserves are `reserve_bytes + reserve_per_gib × O` bytes rounded up to a chunk ([Chunks, floors and the ownership words](#chunks-floors-and-the-ownership-words)). Floors are taken in ascending address order, node 0 first, then the reserves in order. A floor never changes (D-107). The chunks of floors are *none*; the free chunks of reserve *j* have the owner code of reserve *j*; every other chunk has the word *free*, unclaimed.
+5. **Kept frames.** The kernel makes a **kept frame** over each module: ordinary memory, write-back, never cleared, made from no untyped. A module is covered by a run of kept frames in consecutive slots: at each position the kernel takes the largest page size that the processor supports, on which the physical address of the position (and, for a segment, its virtual address) is aligned, and that is not longer than what remains of the module rounded up to a page. The frame takes pages of that size while they fit in what remains, at most *E*, and ends early at the first position aligned on a larger page size that fits. The last frame ends at the module's length rounded up to a page; the loader has zeroed the bytes after the length. No module is refused for its size. Every kept frame of the kept image has the rights `read`, `exec` and `derive`, never `write`.
+6. **Device memory.** Every physical address below the processor's physical address width that is not ordinary memory, not kept, and not of the UEFI type unusable memory, is cut into blocks by the rule of rule 7. That includes MMIO, the framebuffer, the ACPI tables and NVS, firmware-reserved memory and the runtime services of UEFI. Each block is an entry of the device table, unclaimed; 8,192 unused entries follow. No device untyped is given at start-up: the node that will drive a device takes its entries with `memory_take` (D-113).
+7. **Untypeds of a node.** Each range of the node's floor, in ascending order, is cut into the fewest blocks that are each a naturally aligned power of two, of at least one page. At address *a*, with *L* bytes left, the block is 2^min(trailing zeros of *a*, floor(log2 *L*)) bytes. The clean mark of every start-up untyped is at its start. The first of them, the node's **start-up untyped**, pays for the frames of the node start-up (below); its watermark and clean mark stand after them.
+8. **Rights.** The untypeds of the floor have every right, `exec` included: the first service hands that right to the compile service. The `memory_control` has every right, `exec` included, so that the blocks it takes can carry `exec`.
+
+**The node start-up.** Every node, at machine start and at every fresh start ([Cores](#cores)), builds the same state from its floor, the kept image and the machine table. Its member word becomes *starting* with its generation (1 at machine start), and *live* when its first thread is created. Its first thread runs the module of the boot image flagged as the first service at machine start, or the module that `core_start` names at a fresh start.
 
 **Slots.** The start-up space has every segment present from the start, and it never grows.
 
@@ -1085,22 +1411,23 @@ The loader lays out the modules in order, each on a page boundary, from a physic
 | 2 | its `aspace` |
 | 3 | its `thread` |
 | 4 | its `sched` |
-| 5 | `debug` |
-| 6 | the `irq_control` of the boot node |
-| 7 | `ioports` (x86-64; empty on other architectures): every I/O port except those the kernel uses itself (its serial port and the legacy PIC) |
-| 8 | the start-up task (mark-aware) |
+| 5 | the `debug` of this node |
+| 6 | the `irq_control` of this node |
+| 7 | the `ioports` of this node (x86-64; empty on other architectures) |
+| 8 | the start-up task of this node (mark-aware) |
 | 9 | the frame of the start-up page |
 | 10 | the frame of the message page of the first thread, which holds its binding |
 | 11 | a copy of slot 10, which holds the mapping of the message page |
-| 12 | the `memory_control` of the node |
-| 13 | the frame of the living part of the machine table, `read` only |
-| 14-15 | empty |
-| 16 onwards | contiguous, in this order: one `core` capability per core, in the order of the core list, so the boot core's is in slot 16; one `iommu` capability per IOMMU unit, in the order of the entry `Iommu`; then the untypeds: the image untyped, then the blocks of the node's floor by ascending address; then the frames of the modules, in module order, each module a run of consecutive slots |
+| 12 | the `memory_control` of this node |
+| 13 | the kept frame of the living part of the machine table, `read` and `derive` only |
+| 14 | the kept frame of the fixed part of the machine table, `read` and `derive` only |
+| 15 | the mailbox endpoint of this node, with `recv` ([Machine objects](#machine-objects)) |
+| 16 onwards | contiguous, in this order: one root `core` capability per node, in index order, so the capability of node *i* is in slot 16 + *i*; one root `iommu` capability per IOMMU unit, in the order of the entry `Iommu`; one root `role` capability per role, in the order of the entry `Roles`; one kept frame per package for its hardware feedback table, in the order of the entry `Feedback`, where the processor has one; then the untypeds of the node's floor by ascending address; then the frames of the writable segments of the first service, copied (below); then the kept frames of the modules, in module order, each module a run of consecutive slots |
 | after these | empty slots, to the end |
 
-- **A module is a run of frames.** Each module is covered, in order, by frames made from the image untyped, in consecutive slots. At each position the kernel takes the largest page size that the processor supports, on which the physical address of the position (and, for a segment, its virtual address) is aligned, and that is not longer than what remains of the module rounded up to a page. The frame takes pages of that size while they fit in what remains, at most *E*, and ends early at the first position aligned on a larger page size that fits. The last frame ends at the module's length rounded up to a page; the loader has zeroed the bytes after the length. No module is refused for its size.
-- **Number of slots:** the multiple of 128 just at or above 16 + cores + IOMMU units + untypeds + the frames of the modules + 4,096. So the first process always has at least 4,096 empty slots.
-- **Depth and rights.** Every start-up capability except the frames is the root of its object, at depth 1, with every right of its kind (device untypeds without `exec`). The frames are made from the image untyped, in the order modules, start-up page, message page. They are its children at depth 2, with every right; the copy in slot 11 is a child of slot 10, at depth 3. The watermark of the image untyped stands after the message page, so the rest of the image region can be retyped. When every frame of the boot image has been deleted, that memory is usable again, by the ordinary rule of the watermark.
+- **Number of slots:** the multiple of 128 just at or above 16 + *n* + IOMMU units + roles + feedback frames + untypeds + copied segment frames + kept frames + 4,096. So the first service always has at least 4,096 empty slots.
+- **Depth and rights.** Every start-up capability except the frames made from the start-up untyped is the root of its object, at depth 1. A root made from no untyped has every right except `exec` (the `memory_control` excepted, rule 8); a kept frame has the rights rule 5 or its row gives; a machine object's root has every right except `exec`. The frames made from the start-up untyped, in the order copied segments, start-up page, message page, are its children at depth 2, with every right except `exec` (a copied segment that is executable gets `exec`); the copy in slot 11 is a child of slot 10, at depth 3.
+- **Copied segments.** The read-only and executable segments of the first service are mapped straight from their kept frames. Each writable segment is copied into frames made from the start-up untyped, by the rule of rule 5 for page sizes, and mapped from them. So no node ever writes the kept image.
 
 **Address space.**
 
@@ -1113,38 +1440,44 @@ Nothing else is mapped. Each frame capability records its mapping. The address s
 
 **The first thread.**
 
-- **Bindings.** It is bound to the space in slot 1, the address space in slot 2 and the message page in slot 10. It has no fault endpoint. It is attached to the start-up task (identifier 1 of node 0, marks 0, mark-aware), and the `sched` in slot 4 is bound to it.
+- **Bindings.** It is bound to the space in slot 1, the address space in slot 2 and the message page in slot 10. It has no fault endpoint. It is attached to the start-up task of its node (identifier 1 of that node, marks 0, mark-aware), and the `sched` in slot 4 is bound to it. Its feature mask is 0 ([Unlike cores](#unlike-cores)).
 - **State.** It is not suspended, its *cancelled up to* word is 0 and its own marks are 0.
 - **Registers.** The instruction pointer is the entry point of the first service, and the first argument register holds the address of the start-up page (x86-64: rdi = 2 × *P*, 0x2000). Every other register is 0, the flags are at their fixed value (x86-64: 0x202) and the vector state is in its initial state (x86-64: as after FNINIT, with MXCSR 0x1F80). It has no stack: its first instructions set one, from one of its own segments.
-- **Scheduling (design choice).** The `sched` is configured with budget = period = 10 ms, class 1, and the cores set {boot core}. Its bandwidth is the whole core, so the first process lowers it before it configures another context: the first process must run, and only it knows the policy. It configures contexts with the boot core's capability in slot 16.
+- **Scheduling (design choice).** The `sched` is configured with budget 9,843,750 ns and period 10 ms (63/64 of the core: the recovery reserve of [Cores](#cores) holds the other 1/64), class 1, and the cores set {the node's own core}. Its bandwidth fills the node's sum, so the first service lowers it before it configures another context: the first service must run, and only it knows the policy. It configures contexts with its own node's capability in slot 16 + its index.
 
-**The start-up page.** It starts with a header, then a table of entries, then their contents. All integers are little-endian. Offsets are in bytes from the start of the page, and every entry starts on an 8-byte boundary. Each kind appears at most once. Entries are sorted by kind, and a kind with nothing to say is left out (no framebuffer, no crash record, no IOMMU). A reader skips a kind it does not know. The header is `StartHeader` as in `abi/`: magic `START_MAGIC`, version 1, number of entries. It is followed by `StartEntry` records (kind, reserved, offset, length).
+**The start-up page.** It starts with a header, then a table of entries, then their contents. All integers are little-endian. Offsets are in bytes from the start of the page, and every entry starts on an 8-byte boundary. Each kind appears at most once. Entries are sorted by kind, and a kind with nothing to say is left out (no framebuffer, no crash record, no IOMMU). A reader skips a kind it does not know. The header is `StartHeader` as in `abi/`: magic `START_MAGIC`, version 2, number of entries. It is followed by `StartEntry` records (kind, reserved, offset, length).
 
 | Kind | Name | Content |
 |---|---|---|
-| 0 | ObjectSizes | One u64 per object kind, indexed by its number (0 to 18): the bytes `untyped_retype` takes. That is the bytes per slot for a `cspace`, the minimum for an `untyped`, the vector state included for a `thread`, and 0 for a `frame` and for kinds never made from an untyped |
-| 1 | Untyped | `StartUntyped` records (16 bytes): base, slot, log2 of the size, flags (bit 0 device, bit 1 image), node |
-| 2 | Cores | `StartCore` records (24 bytes): APIC ID, node, class (0 performance, 1 efficiency, 0 for every core of a processor that has one type), flags (bit 0 boot core), slot of its `core` capability, reserved. The boot core comes first, then the others by ascending APIC ID; a core's position in the list is its node index. At start-up the boot kernel starts each other core long enough to read its type (x86-64: CPUID leaf 0x1A), then stops it |
+| 0 | ObjectSizes | One u64 per object kind, indexed by its number (0 to 20): the bytes `untyped_retype` takes on this node. That is the bytes per slot for a `cspace`, the minimum for an `untyped`, the size for feature mask 0 for a `thread` (the kind of this node's own core), and 0 for a `frame` and for kinds never made from an untyped |
+| 1 | Untyped | `StartUntyped` records (16 bytes): base, slot, log2 of the size, flags (bit 0 device; other bits 0), node |
+| 2 | Cores | `StartCore` records (32 bytes), one per physical core, sorted by hardware identifier, so a core's position is its core number: hardware identifier (x86-64 APIC ID, ARM64 `MPIDR_EL1` affinity, RISC-V hart ID) (u64); slot of the `core` capability of the node whose own core it is (u32); kind (u16); flags (u16: bit 0 the core firmware booted, bits 1-2 its fence class); number of hardware threads, highest performance level, most efficient performance level, efficiency class (u8 each, 0 where the architecture has none); package (u32); reserved (u32) |
 | 3 | AcpiRoot | One u64: the physical address of the ACPI root pointer |
 | 4 | UefiMemoryMap | Descriptor size (u32), descriptor version (u32), then the descriptors as UEFI gave them |
 | 5 | Framebuffer | Base and size (u64 each); width, height, bytes per line, format (u32 each; 0 = 32-bit BGRx, 1 = 32-bit RGBx) |
-| 6 | EntropySeed | 64 bytes, drawn from the kernel's generator after it has mixed in the loader's seed and the processor's source |
+| 6 | EntropySeed | 64 bytes, drawn from the kernel's generator for this node after it has mixed in the loader's seed and the processor's source; each node, and each fresh start, gets its own |
 | 7 | BootTimes | Five u64: the frequency of the time stamp counter, then the counter at entry to the loader, at `ExitBootServices`, at entry to the kernel and at the first instruction of the first thread (0 if unknown), for the [boot gates](../plan/gates.md#boot-and-shutdown) |
 | 8 | CrashRecord | The bytes of the record; its format is the debugging group's |
 | 9 | Process | `StartProcess` (40 bytes): entry point, address of the message page, of the start-up page, length of the start-up page, number of slots of the space, first empty slot after the ranges |
-| 10 | Modules | `StartModule` records (40 bytes): first slot, number of slots (u32 each), virtual address (0 if not mapped), length in bytes (u64 each), flags (bit 0 mapped, bit 1 read, bit 2 write, bit 3 exec), offset and length of its name, reserved (u32 each). The records are followed by the **name area** of the entry: the names, in UTF-8, without terminator; a name's offset is counted from the start of the name area |
-| 11 | Node | `StartNode` (16 bytes): this node's index, number of nodes, generation, index of the boot node |
-| 12 | Shares | `StartShare` records (24 bytes): node, reserved, base, length; sorted by node, then base |
-| 13 | Interrupts | First and last claimable vector, flags (bit 0 interrupt remapping on, bit 1 x2APIC), number of IOAPICs (u32 each); then, per IOAPIC, its first GSI and its number of inputs (u32 each) |
+| 10 | Modules | `StartModule` records (40 bytes): first slot, number of slots (u32 each), virtual address (0 if not mapped), length in bytes (u64 each), flags (bit 0 mapped, bit 1 read, bit 2 write, bit 3 exec, bit 4 a first service), offset and length of its name, reserved (u32 each). The records are followed by the **name area** of the entry: the names, in UTF-8, without terminator; a name's offset is counted from the start of the name area. For a writable segment, the slots are those of its copied frames |
+| 11 | Node | `StartNode` (16 bytes): this node's index, number of nodes, generation, flags (bit 0 started fresh after a death, bit 1 resumed) (u32 each) |
+| 12 | Floors | `StartShare` records (24 bytes): node, reserved, base, length of each range of each node's floor; sorted by node, then base |
+| 13 | Interrupts | First and last claimable vector, flags (bit 0 interrupt remapping on, bit 1 x2APIC, bit 2 directed end of interrupt possible), number of IOAPICs (u32 each); then, per IOAPIC, its first GSI and its number of inputs (u32 each) |
 | 14 | Kept | `StartKept` records (16 bytes): base, length of each range the kernel keeps |
-| 15 | Memory | `StartMemory` (56 bytes): the user range end (the reserved slot starts there), address of the code page, address of the clock page (u64 each); the log2 of each page size, indexed by page size index, 0 where the processor has none (four u8); *E*, *L*, address width of the iospaces, page sizes of the iospaces (bit *i* for page size index *i*), flags, two reserved (u32 each). These are the [Values of the machine](#values-of-the-machine); the user range end depends on the machine, and `abi/` keeps only the x86-64 value |
-| 16 | Iommu | `StartIommu` records (16 bytes): slot of its `iommu` capability, PCI segment, number of domain numbers, reserved |
+| 15 | Memory | `StartMemory` (56 bytes): the user range end (the reserved slot starts there), address of the code page, address of the clock page (u64 each); the log2 of each page size, indexed by page size index, 0 where the processor has none (four u8); *E*, *L*, address width of the iospaces, page sizes of the iospaces (bit *i* for page size index *i*), flags (bit 0 `iospace_map` also asks the unit's role holder to invalidate), two reserved (u32 each). These are the [Values of the machine](#values-of-the-machine); the user range end depends on the machine, and `abi/` keeps only the x86-64 value |
+| 16 | Iommu | `StartIommu` records (16 bytes): slot of its `iommu` capability, PCI segment, number of domain numbers, the index of its role (u32 each) |
+| 17 | Machine | `StartMachine` (64 bytes): the offsets, in the frame of slot 13, of the ownership words, the device table, the gate words, the page classes, the member table, the role table, the grant tables and the use tables (u32 each); the number of chunks (u64); the capacity of the device table, the number of roles, `GRANTS`, the layout version (0) (u32 each); reserved (u64) |
+| 18 | Roles | `StartRole` records (8 bytes): kind (u8: 0 unit, 1 reserve, 2 plain), what it governs (u8: 0 IOMMU unit, 1 IOAPIC, 2 GIC distributor, 3 GIC ITS, 4 console, 5 reserve, 6 plain), the index of that object (u16), the slot of its capability (u32) |
+| 19 | Reserves | `StartShare` records, one per range of each reserve (the node field holds the reserve's index) |
+| 20 | Image | `StartImage` (48 bytes): base and length of the kept image (u64 each), its SHA-256 (32 bytes) |
+| 21 | Kinds | `StartKindRecord` records (56 bytes), one per kind of core, by kind number ([Unlike cores](#unlike-cores)) |
+| 22 | Features | For each kind, by kind number, 32 u32: the bytes of the save area of each state feature, indexed by its bit (0 if the kind does not have it) |
+| 23 | Feedback | `StartFeedback` records (16 bytes): package, slot of its kept frame, bytes, reserved (u32 each) |
 
-**Hooks for a reloaded kernel (D-107, D-108).** They are placed now, without designing the protocol between kernels.
+**Generations and references to another node (D-107, D-108).**
 
-- The share of each node and the core list are in the machine table, read-only from the end of start-up, and are copied into the entries `Shares` and `Cores`. A kernel that is reloaded on a node rebuilds the start-up state of that node from its share by the same rules: the same slots 1 to 11, its own share's untypeds, no `core` capability, no `iommu` capability and no device untyped. What its first thread runs is fixed by `core_start`.
-- Every node has a **generation**: 1 for every node at machine boot, incremented each time the node is reloaded. It is given in the entry `Node`.
-- A reference held by one node to an object of another node carries the index and the generation of that node (`NodeGen` in `abi/`). A reference whose generation is not the node's current one names nothing, and its use returns `gone`.
+- Every node has a **generation**: 1 at machine start, one more at each fresh start ([Cores](#cores)). It is in its member word and in the entry `Node`.
+- A reference held by one node to an object of another node goes through a grant, which records the granting node's generation ([Grants](#grants-capabilities-and-memory-between-nodes)); a reference of an earlier generation names nothing, and its use returns `gone`. `NodeGen` in `abi/` keeps its format for the messages between kernels.
 - Task identifiers carry the node index. After a reload, a log that spans the reload records the generation alongside the identifier.
 
 ## Synchronous or asynchronous
@@ -1265,12 +1598,22 @@ The Zig part is the architecture layer plus the fast path, so it is rewritten fo
 | Devices follow their driver (D-113) | Devices, their `iospace` tables, their MSI vectors and their remapping entries belong to the driver's node; each IOMMU unit and each IOAPIC has a role held by one node, which serves attach, detach, invalidations and line programming, and is rebuilt from the live nodes' reports after a death | A: every device on the boot node (rejected by D-112). B: a lock between kernels on the shared hardware | Rule: the data path survives the death of a role holder; changes on that unit wait; the holder is trusted by all for DMA on its unit. A: every driver loses its MMIO when the boot node is reloaded. B: contradicts D-026 |
 | The interrupt table is fixed kernel memory | An exception to rule 3, 12 KB per node | An `irq` made from an untyped | Rule: 12 KB per node outside any untyped. Alternative: revoking the control capability no longer reaches the vectors, and a vector exists only while someone pays for it |
 | No vector state in the register calls | The register calls carry the general registers only | A frame argument that receives the XSAVE image | Rule: a user-space debugger of native services sees only the general registers. Alternative: a format that depends on the processor's features in the contract |
+| Roles instead of privileged nodes (D-115 point 3) | Every duty that needs one holder is a role, moved by its holder's last write or after its holder's core is stopped; every node starts the same way from the kept image; a `core`, `iommu` and `role` capability per node in every start-up space | A boot node that holds the root of authority, the shared hardware and the anchors | Rule: *n*² machine roots (1 MB at 128 nodes), more roles to model. Alternative: the boot node is necessary to the machine |
+| The kept image | Kept, read-only, common, for the life of the machine | An image untyped of one node, reclaimable after boot | Rule: the image's size is kept for ever. Alternative: recovering the supervisor needs storage, so drivers, so the services recovery is restarting |
+| Stopping a core (D-117) | INIT on x86-64 (the bootstrap core by its NMI handler), an unmaskable signal and `CPU_OFF` on ARM64, the `fence_hart` extension or `sbi_hart_stop` on RISC-V; unit roles go to forced-fence cores; an unfenced node keeps only its own memory and its grants frozen, its unit roles move after `FENCE_NS` + `SETTLE_NS` | The hardening monitor everywhere; or never take a unit role from an unfenced holder | Rule: relies on the gate to keep an unfenced holder away from its unit. Monitor: forced stops everywhere, a few thousand trusted lines per architecture. Never: a hung holder freezes its unit's changes until a restart |
+| Reload policy | The kernel never reloads a node; a supervisor calls `core_start`; a node that fails repeatedly stays dead or its core is retired | Automatic reload with back-off; or kernel.md's "complete stop if the failure repeats" | Rule: no reload if every supervisor is gone. Alternatives: policy in the kernel; or a machine that dies, against D-116 |
+| The mailbox | A `core` capability with `send` reaches the current generation's mailbox | Capabilities to every other node's mailbox, made at each start | Rule: one deliberate exception to "a reference to a reloaded node is `gone`". Alternative: a derivation recorded on both sides for every pair at every start |
+| Feature masks (D-118) | The mask is the size argument of `untyped_retype` and fixes the save area; `thread_set_features` changes it within that area on a suspended thread | Allocation at first use; or every feature's area for every thread | Rule: the creator must know which large features a thread may use. Alternatives: kernel memory at fault time (rule 3), or hundreds of KB per thread |
+| Moving a thread (D-115, D-118) | `thread_move` hands the whole state to a thread made beforehand on the destination node; objects never change node | A forwarding object on the source node | Rule: the caller makes the destination's bindings, and capabilities to the old thread do not follow. Alternative: every call on the thread a message between kernels for its life |
+| Instructions retired (D-118 point 2) | Counted per context on demand (`sched_count`), with the hardware class | Always counted | Rule: no cost on contexts nobody asks about. Alternative: a counter read at every switch of contexts |
 
 ## Open points
 
-- **The depth rule and a machine that does not die.** The start-up `untyped` capabilities never leave the start-up space, which lives in one core's kernel. The multi-core part must say how the root of authority survives the loss of that kernel: one start-up space per core, each able to recreate the supervisor and the memory service, or another answer. The hooks are placed ([Start-up state](#start-up-state): machine table, shares, generations); the protocol is not. Until then the first process is a single point of failure, as the root task of seL4 is.
+- **The bootstrap core on x86-64** (D-117). INIT cannot stop the core firmware booted, so a kernel there too damaged to run its NMI handler ends unfenced. A trial on the reference desktop says whether clearing its bootstrap flag after start-up removes this exception; until then that core has fence class 1 and holds no unit role while a core of class 2 lives.
+- **The vector length on RISC-V** (D-118), to check before the rule is final: whether a RISC-V core runs correctly code made for a shorter vector length. The contract writes one length per kind and refuses to place a thread on a kind of another length; if shorter code runs correctly, a thread could also run on a kind whose length is longer than its own.
+- **The times of membership** (`STALE_NS`, `STUCK_NS`, `SWEEP_NS`, `FENCE_NS`, `SETTLE_NS`) and the recovery reserve, to measure on the reference machines: the longest firmware stall, the time of a fence per architecture, the time for posted writes to reach a device after a stop, the time to reclaim.
 - Numbers (error codes, bits of the rights, kinds, calls, layout of the header) are defined in `abi/`, which is the reference for values; this document names them.
-- The groups not yet specified: cores (`core_start`, `core_stop`, `core_status`, and the call that gives a kernel its table of idle states), debugging (`debug_write`, `trace_emit`), and `ioports` (no call uses it yet: how it opens ports to a thread).
+- The groups not yet specified: debugging (`debug_write`, `trace_emit`), and `ioports` (no call uses it yet: how it opens ports to a thread).
 - **The protocol of a core group** (D-027): how a node joins and leaves the group of a multi-node address space, and how a change of the home copy reaches the other copies. The hooks are placed (each copy an `aspace` of its node, the frames under grants, the state *waiting for another node*); the protocol needs the formal model of the change of size of a group (kernel.md) before it is written.
 - Message words in registers once APX is available (see [kernel.md](kernel.md#hardware-features)).
 - The step bound of removal (32), the segment size of a `cspace` (128 slots) and the clearing step (64 KB), to fix by measurement.
