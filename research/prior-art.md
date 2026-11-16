@@ -56,7 +56,7 @@ These precedents concern the variants described in [kernel.md](../architecture/k
 4. The task as a kernel object: a single object gathers the delegated rights, the time budget, the provenance label and the log of an agent task, revocable in one operation. As the kernel contract now writes it (D-110, proposed, awaiting the two owners): the task object gathers the provenance marks and the threads of an agent task and stops them in one operation; its rights are removed with its capability spaces, its time is the scheduling contexts of its threads, and its log is the runtime's journal keyed by the task identifier the kernel stamps ([Tasks and marks](../architecture/kernel-interface.md#tasks-and-marks)).
 5. No executable page outside the compile service, enforced by the kernel.
 
-The recovery of one core's kernel, now part of axis 2, was first recorded as a candidate for a further axis to claim (see [kernel.md](../architecture/kernel.md#recovery-of-one-cores-kernel)).
+The recovery of one core's kernel, now part of axis 2, was first recorded as a candidate for a further axis to claim (see [kernel.md](../architecture/kernel.md#recovery-of-one-node)).
 
 Honest finding: today the mechanisms of the kernel are all borrowed (model of seL4, structure of Barrelfish). The novelty is in the method, in the combination and in these axes, none of which is designed yet.
 
@@ -111,7 +111,7 @@ From the same study:
 
 ## Other prior art recorded elsewhere
 
-- Recovery of a kernel (Hive, Barrelfish/DC, Quest-V, Kmorph, Otherworld): [kernel.md](../architecture/kernel.md#recovery-of-one-cores-kernel).
+- Recovery of a kernel (Hive, Barrelfish/DC, Quest-V, Kmorph, Otherworld): [kernel.md](../architecture/kernel.md#recovery-of-one-node).
 - Linux drivers in user space (SUD, LKL, Genode, LinuxKPI, LionsOS): [drivers.md](../architecture/drivers.md).
 - Agent security (lethal trifecta, rule of two, FIDES, RTBAS, IsolateGPT): [security.md](../architecture/security.md#security-model-of-the-agent).
 - Distributed capabilities (CapTP, Cap'n Proto) and Plan 9: [devices.md](../architecture/devices.md#principle).

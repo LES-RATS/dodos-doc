@@ -19,115 +19,102 @@ The kernel is a capability microkernel. A **capability** is a token that designa
 
 The feasibility of the Zig / Rust boundary and of the event-driven kernel with no per-thread stack is "from memory"; both are trial subjects in weeks 1-2 of the [calendar](../plan/roadmap.md#calendar).
 
-The kernel has its own replacement mechanism, based on versioned object formats (see [Hot replacement](#core-by-core-replacement)).
+The kernel has its own replacement mechanism, based on versioned object formats (see [Hot replacement](#node-by-node-replacement)).
 
 ## Multi-core structure
 
-**Decided, 14 November 2026.** One kernel per core, with no shared state; kernels talk only by messages. The recovery of one core's kernel is part of version 1 (decision of the user), and the points below follow from it.
+**Decided by the owners, 16 November 2026 (D-128), reopening D-026, D-028 and D-108.** The rules that follow from it, where no decision spoke, are proposed by the assistant (D-129) and written in the [contract](kernel-interface.md).
 
-- **Core group.** The term has one meaning: the per-core kernels that hold, by messages, the address space of one process. How a group is sized and budgeted is in [scheduling.md](scheduling.md#core-group-of-a-multithreaded-process).
-- **Page tables.** Each core has its own copy of the page table of a process that is spread over several cores.
-- **Capabilities.** The derivation tree (the tree that links a capability to the capabilities derived from it) is kept per node, and a slot never names a slot of another node: a capability that crosses to another node goes through a **grant** written by the owner's write gate, and the holder's copy names the grant ([Grants](kernel-interface.md#grants-capabilities-and-memory-between-nodes)). Revoking a grant is the distributed two-phase protocol of D-027 (the grant becomes *revoking*, then is freed once the holder has removed its copies and their mappings), with a formal model. It removes the capabilities of an agent task once `task_revoke` has stopped its threads; stopping needs no protocol, because a task and its threads are on one node (D-110, proposed; see [Tasks and marks](kernel-interface.md#tasks-and-marks) and the [research axes](../research/prior-art.md#kernel-research-axes)).
-- **Memory ownership invariant.** Nothing that a live kernel depends on is recorded only in another kernel. Every chunk of ordinary memory and every entry of device memory has one owner node, recorded in the living part of the machine table and written only through the owner's write gate; each node keeps a small floor that never moves, and the rest moves between nodes by `memory_give` and `memory_take` (D-112 to D-115, [Memory and devices between nodes](kernel-interface.md#memory-and-devices-between-nodes)). A node maps memory it does not own only under a grant, so every remote mapping is recorded on both sides. No memory of a dead node is reused before its core is stopped and every live node that could reach it has acknowledged ([The reclaim barrier](kernel-interface.md#the-reclaim-barrier)).
-- **Inter-kernel protocol.** It is versioned, and compatible from one version to the next, so that the kernel can be replaced core by core.
-- **Formal models.** Three models are checked by state exploration (TLA+ or equivalent): revocation between cores, change of size of a group, recovery of a kernel.
-- **Services.** A service chooses to have one thread or one thread per core.
-- **Hardware threads of one physical core.** In version 1: one kernel per physical core, and the second hardware thread stays idle.
-- **Prior art to cite.** Hive (SOSP 1995).
+- **A node is one kernel, and may cover several cores.** A node is the state of one kernel (its block, with a defined and versioned format) and the set of physical cores it runs on, fixed when it starts and kept until it ends. Inside a node the cores share state, with locks ([A node of several cores](kernel-interface.md#a-node-of-several-cores)). A node of one core is a particular case of the same rules, not a separate design.
+- **Between nodes: no mutable kernel state shared**, other than the single-writer words of the living part of the machine table, written through the gates; messages only.
+- **Only one-shot operations cross between nodes.** The receiving kernel finishes each in one bounded step and keeps nothing on behalf of the sender. What crosses: the ownership words; grants of frames, with their revocation and release; a remote signal (the doorbell of a frame grant); a stamped, bounded send into a node's mailbox; membership, accusation, the fence and the reclaim barrier R0 to R6; roles; unit requests. Twelve message kinds on two rings per ordered pair of nodes ([What crosses between nodes](kernel-interface.md#what-crosses-between-nodes)). Rule 7 of D-122 (a call on an object of another node works as if it were local) is withdrawn, and with it remote calls and waits held by proxies, the transfer of capabilities other than grants of frames, `thread_move` and carried calls.
+- **No node runs on another node's core.** Parking and co-hosting (D-108) are gone. An idle core sleeps in place; an idle node sleeps in place. Sealing remains only to replace a kernel by a new version.
+- **A process lives in one node.** A process with threads on several cores lives in a node of several cores; no protocol between nodes serves one process's address space. The core group of the previous text, a process spread over several nodes with a copy of its page tables on each, is gone.
+- **Memory ownership invariant.** Nothing that a live kernel depends on is recorded only in another kernel. Every chunk of ordinary memory and every entry of device memory has one owner node, recorded in the living part of the machine table and written only through the owner's write gate; each node slot keeps a small floor that never moves, and the rest moves between nodes by `memory_give` and `memory_take` (D-112 to D-115, [Memory and devices between nodes](kernel-interface.md#memory-and-devices-between-nodes)). A node maps memory it does not own only under a grant of a frame, so every remote mapping is recorded on both sides. No memory of a dead node is reused before every one of its cores is stopped and every live node that could reach it has acknowledged ([The reclaim barrier](kernel-interface.md#the-reclaim-barrier)).
+- **Inter-kernel protocol.** It is versioned, and compatible from one version to the next, so that the kernel can be replaced node by node.
+- **Formal models** (D-027, restated for this shape in the [contract](kernel-interface.md#changes-for-abi-and-the-model-d-128-d-129)). Three models are checked by state exploration (TLA+ or equivalent): grants, stamped sends, signals and revocation between nodes; the life of a node of several cores (start, seal, fence, restart, at the level of single word accesses); recovery at the level of single word accesses under x86-TSO and the Armv8 memory model, with small models inside one node for the shootdown, the lock-free slot read and the atomic signal.
+- **Services.** A service chooses to have one thread or one thread per core of its node.
+- **Hardware threads of one physical core.** In version 1 the second hardware thread stays idle (D-028, that part kept). If it is used later, both hardware threads of a core belong to the same node.
+- **Prior art to cite.** Hive (SOSP 1995), whose cells of several processors are its units of failure, fixed at boot; the clustered multikernel of seL4 (von Tessin, 2012), nodes of several CPUs with a big lock inside and communication across nodes through shared user memory only, fixed at boot, with no recovery.
 
 ### Nodes, cores and load
 
-**Decided, 15 November 2026** (D-108, validated by D-113), except the question of a node on several cores, which the measured trial decides. To design before the one-core kernel is written, for what it fixes in the layout of kernel state.
+**Decided by the owners, 16 November 2026 (D-128); the plan below is theirs.** The specification and the model describe a node of *N* cores fixed at its creation, *N* = 1 being a particular case. The kernel is built with *N* = 1 first, then *N* > 1; the contract, `abi/` and the layout of every object are the same for both.
 
-- **A node is the state of one per-core kernel**, held in one block of memory with a defined, versioned format: the root of its capability tree, its scheduling state, its floor of physical memory and its generation. The kernel code works on the node it is given. (The kernel control block of Barrelfish/DC, cited.)
-- **A node is bound to a core at run time, not for ever.** Under low load the nodes of several cores are parked on one core that stays awake and runs them in turn, and the other cores sleep; under load each node gets its core back. Nodes still share no state and talk only by messages, parked or not, so nothing above the kernel sees the difference except in timing.
-- **This is not the shared kernel with a short lock.** That variant runs one kernel on several cores at the same time over shared state; it stays a measured comparison point, set aside by D-026 because a panic would take the whole group and a lock makes the duration of a call depend on other cores.
-- **Containment is per node.** The kernel maps only the node it is running. A panic while it runs one node does not touch the nodes parked beside it.
-- **The floor of physical memory belongs to the node** and is fixed at start-up (D-107, amended by D-114); it is enough to restart the node. The rest of memory is in chunks that change owner, driven by the memory service. A node that is reloaded is rebuilt from its floor and the kept image, then takes memory again with `memory_take`.
-- **Shared hardware is driven by roles.** Each IOMMU unit and each IOAPIC has a role held by one node at a time; devices, their DMA tables and their MSI vectors belong to the node of their driver (D-113) and keep working while a role holder is recovered; only changes on that unit wait ([Roles](kernel-interface.md#roles)).
-- **A process has a home node**, the one its memory comes from: the memory service moves chunks to that node before it makes the process's frames, so a process does not depend on the nodes whose memory it does not share. Its core group may spread to other nodes, which hold remote mappings recorded on both sides. If the home node is lost the process is lost. If another node of the group is lost the process loses the threads that ran there, which is reported to it, and continues.
-- **No node is necessary to the machine** (D-115 point 3). Every duty that needs one holder is a role that moves after its holder's core is stopped, and every node starts the same way from the kept image. The supervisor and the memory service run on the nodes that hold the reserve roles (at least two). A service that must survive the loss of a node does the same.
+- **A node runs on a set of physical cores recorded by core words.** Each physical core has a word in the living part of the machine table that names the node holding it (free, joining, owned; *leaving* reserved), written through the gates ([Node slots and core words](kernel-interface.md#node-slots-and-core-words)). The machine table has node slots distinct from physical cores, each with its floor; a node starts in a slot, on free cores, and keeps them until it ends.
+- **Containment is per node.** A node's kernel maps only its own memory and what it was granted; a panic in a node, or one of its cores that stops answering, ends that node and only it.
+- **The floor of physical memory belongs to the node slot** and is fixed at start-up (D-107, amended by D-114); it is enough to restart a node in that slot. The rest of memory is in chunks that change owner, driven by the memory service. A node that is reloaded is rebuilt from its floor and the kept image, then takes memory again with `memory_take`.
+- **Shared hardware is driven by roles.** Each IOMMU unit and each IOAPIC has a role held by one node at a time; devices, their DMA tables and their MSI vectors belong to the node of their driver (D-113) and keep working while a role holder is recovered; only changes on that unit wait ([Roles](kernel-interface.md#roles)). A multi-queue device spreads its vectors over the cores of its driver's node.
+- **A process lives in one node**, the one its memory and objects come from. If that node is lost, the process is lost; the loss of another node costs it only the frames it mapped from there.
+- **No node is necessary to the machine** (D-115 point 3). Every duty that needs one holder is a role that moves after its holder's cores are stopped, and every node starts the same way from the kept image. The supervisor and the memory service run on the nodes that hold the reserve roles (at least two, in distinct nodes, preferably of one core each). A service that must survive the loss of a node does the same.
+- **Cores that move between nodes at run time are not in the contract as rules** (D-128): four models broke that protocol in turn, each at a finer grain. The contract holds what must exist from the start so that they are an addition and not a rewrite (the core word and its states, node slots distinct from physical cores, the values of `abi/`), and an open point names the draft, its explorer, the faults found and what must hold before it enters ([Open points](kernel-interface.md#open-points)).
 
-**The one question that separates the candidates: may a node run on more than one core at the same time?**
-
-| Answer | What it gives | What it costs |
-|---|---|---|
-| No (the proposal above) | A kernel with no lock; the duration of a call never depends on another core | A process with threads on several cores spans several nodes: page tables and capabilities kept coherent by messages, the hardest point of the project |
-| Yes, in groups fixed at start-up (pairs, or the cores that share a cache; the two hardware threads of one core are the smallest group and would use the thread left idle by D-028) | A multithreaded process inside one group has one address space and one capability space, with no protocol between kernels | One lock in the kernel, held by the cores of the group only; two ways of running to verify, locked inside a group and by messages between groups |
-| Yes, in groups that change size with the load (idea of the user: six cores under one kernel for a process that needs six, the others kept apart as the safety net) | The same, sized to the process | The same, and moving a running core from one node to another |
-
-In the three cases a panic is contained in one node, a process dies with its home node, and the rest of the machine continues. Precedent for the second, from memory, to verify: the clustered multikernel studied for seL4 (von Tessin, 2012), and the fact that a microkernel spends little time in the kernel, which makes one lock for a few cores cheap. The trial of weeks 1-2 measures the three on the same bench before this is decided.
-
-Open in this proposal: the cost of running a parked node (Barrelfish/DC measures a naive time-sharing of 20 ms slices). Settled since: a survivor tells a reference to a reloaded node from an old one by its generation, recorded in the grant ([Grants](kernel-interface.md#grants-capabilities-and-memory-between-nodes)); what the placement service needs from the kernel is in [Unlike cores](kernel-interface.md#unlike-cores) and [Cores](kernel-interface.md#cores).
-
-Reasons recorded for the messages-only variant: kernels that share no state and talk by messages make the failure of one kernel the failure of one node in a distributed system. A replicated log (the NrOS technique) is state shared between kernels, which is harder to make safe if a kernel dies in the middle of a write.
+The question this section asked since 14 November 2026, "may a node run on more than one core at the same time?", is answered: yes, in groups sized when the node starts (the second row of the earlier table), with the growth and shrinking of the third row left to the open point above. The measured trial of the three candidates (branch `trial-multicore`, `results-mac-m5.md`) informs the choice of locks inside a node, still open ([Open points](kernel-interface.md#open-points)).
 
 ### Hard points
 
-- A process with several threads on several cores shares one address space, so its page tables and its capabilities must stay coherent between kernels (messages, TLB invalidation; the TLB is the processor's cache of address translations).
+- **A node of several cores is a concurrent kernel.** Suspending, cancelling or destroying a thread that runs on another core of the node needs that core to leave it first (the clustered multikernel's thread-deletion problem: two thread states, eight preemption points and a 1,000-line invariant proof there); the contract places one thread state and one wait state for it.
+- **The gate of a node of several cores** must hold its invariant after every store, since the walkers of the node's other cores read the tables while it writes them, and with the other cores' TLBs (G12); the tools for that proof are unfinished ([gate-page-tables.md](../research/drafts/gate-page-tables.md)).
+- **The bounds of D-042 grow with *N*** and with the slowest kind of core in a node: a lock held by an efficiency core delays a performance core.
 - seL4 also retains a statically partitioned multikernel as its path to verified multi-core, and discourages IPC between cores in it (verified 14 November 2026 by web search, abstracts and official pages).
-- An overhead gate is added for IPC between cores (see [gates](../plan/gates.md#overhead-gates)).
-- Performance cores and efficiency cores (P and E cores): the placement policy stays in user space (see [scheduling.md](scheduling.md)).
-- The real gain of one kernel per core for P and E cores, and the compared cost of the alternatives below, are not measured.
-- A move of a thread between unlike cores is a move between nodes (`thread_move`, [Unlike cores](kernel-interface.md#unlike-cores)), so placement is by role and class, re-examined every few periods, not phase by phase (see the measurements cited in the research draft on heterogeneous cores).
+- An overhead gate is added for IPC between cores of one node and for a request and reply between two nodes (see [gates](../plan/gates.md#overhead-gates)).
+- Performance cores and efficiency cores (P and E cores): the placement policy stays in user space (see [scheduling.md](scheduling.md)). A node may hold cores of several kinds that have the same state features and vector lengths; a context is placed on one core of its node and moved inside the node by the placement service ([Unlike cores](kernel-interface.md#unlike-cores)).
 
 ### Alternatives kept as comparison points
 
-These variants are no longer candidates. They are measured on the same bench as the retained variant.
+These variants are no longer candidates. They are measured on the same bench as the retained shape.
 
 | Variant | Description |
 |---|---|
-| Shared kernel with a short lock | One kernel for the core group of a multithreaded process, with a short lock, the group changing size with the load |
-| Global lock | One lock for the whole kernel |
-| Replicated log | The split is by kind of state, not by core. State that belongs to one core (IPC, scheduling, interrupts) stays local and lock-free. State of a process spread over several cores (address space, capabilities) is replicated through a shared log. Formerly proposed as a "hybrid structure" |
+| One node per core with the reduced set between nodes | The shape "B" of the drafts: every node of one core. It is the retained shape with *N* = 1 everywhere, and what the first kernel runs |
+| Global lock | One lock for the whole kernel of the machine, with no nodes |
+| Replicated log | The split is by kind of state, not by core. State of a process spread over several cores is replicated through a shared log. Formerly proposed as a "hybrid structure" |
 
 Precedents for these variants are listed in [research/prior-art.md](../research/prior-art.md#multi-core-structure-precedents).
 
 ### Dynamic structure
 
-**Proposed.** The number of active cores and their assignment follow the load. Barrelfish/DC adds, removes and replaces a core at run time. The replica of a process exists only on the cores where it has a thread. A core that is not needed is removed, then brought back by the normal core start-up path.
-
-Cores on demand are deferred until after the alpha (**Decided**, 14 November 2026; see [roadmap](../plan/roadmap.md#deferred-after-the-alpha)).
+**Proposed.** The number of active cores and their assignment follow the load. In version 1 this means: idle cores sleep in place inside their nodes, and the placement service creates and ends nodes on free cores (`node_start`, `node_stop`), sized when they start. **Nodes that take and give cores at run time ("cores on demand") stay after the alpha** (**Decided**, 14 November 2026; see [roadmap](../plan/roadmap.md#deferred-after-the-alpha)), and enter the contract only once the conditions of its open point hold (D-128).
 
 ## Capabilities and revocation
 
 - Any call on a capability can fail, because a capability is revocable (rule 1 of the [ABI](wasm-abi.md#abi-rules)).
-- Revocation walks the derivation tree, a mechanism borrowed from seL4 (see [borrowings](../research/prior-art.md#borrowings)). With one kernel per core it is the distributed two-phase protocol described above.
+- Revocation walks the derivation tree, a mechanism borrowed from seL4 (see [borrowings](../research/prior-art.md#borrowings)), inside one node. A frame granted to another node is revoked by the two-phase protocol of D-027 (the grant becomes *revoking*, then is freed once the holder has removed its copies and their mappings), with a formal model; no other capability crosses nodes (D-128, [Grants](kernel-interface.md#grants-frames-between-nodes)).
 - A right is a capability and a revocable line in a central place; see [security.md](security.md#permissions).
 - Capabilities typed by WIT (**Aligned**: retained with the user's agreement, to be designed; from the second delegated study of 14 November 2026, not cross-checked): the compiler emits the manifest, and the WIT keywords `own` and `borrow` become derivation and attenuation. This is already the project's design. The earlier claim that it "does not seem to be published" is softened (**Decided**, 14 November 2026; see [prior art](../research/prior-art.md#novelty-claims-and-verdicts)).
 
-## Recovery of one core's kernel
+## Recovery of one node
 
-**Decided for version 1, 14 November 2026** (decision of the user). The mechanism below was proposed at the user's request and replaces "stop everything": a kernel that panics restarts alone, and the machine continues.
+**Decided for version 1, 14 November 2026** (decision of the user); a node covers several cores since D-128. The mechanism below was proposed at the user's request and replaces "stop everything": a kernel that panics restarts alone, with all its cores, and the machine continues.
 
 1. **Containment.** Each kernel maps only its own memory and what it was granted, and validates every message it receives from another kernel. The write gate holds this: the node's page tables, the IOMMU tables, interrupts to other cores, the sensitive ports and firmware calls are written only by it, and it refuses a translation to memory or to a device the node does not own (D-117, D-120; [The gate over page tables](kernel-interface.md#the-gate-over-page-tables)). Without this, a faulty kernel can write into its neighbours and nothing is guaranteed.
-2. **Detection.** Evidence checked in shared memory by the gate: a node's own panic record, a heartbeat that stops while the core is not idle, a ring left unconsumed; never a vote ([Detection](kernel-interface.md#detection-evidence-not-opinion)).
-3. **Recovery.** The order is: isolate the core (accusation, DMA blocked by the role holders, the core stopped by the cheapest sufficient means of its architecture: D-117), reset the devices whose driver ran on it, reclaim the memory (every live node removes its translations to the dead node's memory and acknowledges; the node is dead when the barrier holds), reload the kernel (a supervisor calls `core_start`). The kernel is reloaded through the normal core start-up path. References to its objects return `gone`, which rule 1 of the ABI already requires callers to handle. A driver follows the [driver restart protocol](drivers.md#restart-of-a-driver). Recovery does not assume process snapshots: what happens to the processes that ran on the core follows [platform.md](platform.md#process-state-suspend-resume-and-snapshots).
+2. **Detection.** Evidence checked in shared memory by the gate: a node's own panic record (written by any of its cores, also when one of its cores stops answering the others), a heartbeat of one of its cores that stops while the core is not idle, a ring left unconsumed, a seal held too long; never a vote ([Detection](kernel-interface.md#detection-evidence-not-opinion)).
+3. **Recovery.** The order is: isolate the node (accusation, DMA blocked by the role holders, every one of its cores stopped by the cheapest sufficient means of its architecture: D-117), reset the devices whose driver ran on it, reclaim the memory (every live node removes its translations to the dead node's memory and acknowledges; the node is dead when the barrier holds, and its cores are free), reload the kernel (a supervisor calls `node_start`, on free cores). The kernel is reloaded through the normal core start-up path. References to its objects return `gone`, which rule 1 of the ABI already requires callers to handle. A driver follows the [driver restart protocol](drivers.md#restart-of-a-driver). Recovery does not assume process snapshots: what happens to the processes that ran on the core follows [platform.md](platform.md#process-state-suspend-resume-and-snapshots).
 4. **Later, research.** Adopt the state of the old kernel after validation, instead of starting again from saved state (Otherworld does this for Linux, with a stated 97 % success rate).
-5. **Core with a hardware fault.** It is removed, and the machine continues with the others.
+5. **Core with a hardware fault.** Its node is stopped and the core marked unusable (`node_stop` mode retire); the node can be started again on its other cores, and the machine continues.
 
 ```mermaid
 sequenceDiagram
-    participant A as Kernel of core A
-    participant B as Kernel of core B, faulty
+    participant A as Node A
+    participant B as Node B, faulty, on cores 2 to 5
     participant V as Supervisor service
     participant M as Memory service
     B--xA: heartbeat stops, or panic reported
     Note over A: accuses B with evidence the gate checks
-    A->>B: NMI, then INIT and the park stub (x86-64)
+    A->>B: to each of B's cores: park request, mark, NMI, then INIT and the park stub (x86-64)
     Note over A: role holders block the DMA of B's devices
-    Note over A,B: B fenced: every live node removes its translations to B's memory and acknowledges
-    Note over A: barrier holds: B dead, its memory free for any live node
+    Note over A,B: B fenced when every core is confirmed: every live node removes its translations to B's memory and acknowledges
+    Note over A: barrier holds: B dead, its memory and its cores free
     A->>V: watchers signalled: B is dead
     V->>V: resets the devices whose driver ran on B
-    V->>B: core_start mode fresh
+    V->>B: node_start mode fresh, on free cores
     Note over A,B: capabilities to objects of the old generation return gone
 ```
 
 Further rules:
 
-- A complete stop happens only if containment itself is violated; a node that fails repeatedly is left dead, or its core retired (`core_stop` mode retire). The stop record is written to the crash area in memory, the machine restarts by a warm reset, and the next boot hands the record over; the storage service writes it to the reserved area (see [storage.md](storage.md#partitions) and [The crash record](kernel-interface.md#the-crash-record)).
-- Check: the deterministic simulation kills a kernel at random at every merge and verifies that the rest survives. A gate is to be set: the recovery time of a core (see [gates](../plan/gates.md#overhead-gates)).
+- A complete stop happens only if containment itself is violated; a node that fails repeatedly is left dead, or one of its cores retired (`node_stop` mode retire). The stop record is written to the crash area in memory, the machine restarts by a warm reset, and the next boot hands the record over; the storage service writes it to the reserved area (see [storage.md](storage.md#partitions) and [The crash record](kernel-interface.md#the-crash-record)).
+- Check: the deterministic simulation kills a kernel at random at every merge, and a core of a node of several cores, and verifies that the rest survives. A gate is to be set: the recovery time of a node, as a function of its number of cores (see [gates](../plan/gates.md#overhead-gates)).
 - Prior art (web search of 14 November 2026, abstracts only): Barrelfish/DC replaces the kernel of a core at run time, with no failure evaluation found; Quest-V recovers after a failure but isolates its kernels by virtualisation; Kmorph (Linux, out of tree) keeps a spare kernel that takes over the machine in about one second. Hive (SOSP 1995) is to be cited. Recovery was recorded as a candidate research axis to claim, with a strong argument on the server side, to be verified; it is now part of [research axis 2](../research/prior-art.md#kernel-research-axes) (**Decided**, 14 November 2026).
 
 ### The write gate: mechanisms
@@ -158,8 +145,8 @@ Further rules:
 | 2 | Permission overlays (`POR_EL1`, FEAT_S1POE) | Yes, for the table index | No figure on hardware | When present; no shipping core found |
 | 3 | Page tables typed as Guarded Control Stack pages, written by `GCSSTR` | None | No figure | When present (Armv9.3 GCS with S1PIE); no shipping core found |
 
-- **Forbidden outside the gate:** writes to `TTBR0_EL1`, `TTBR1_EL1`, `TCR_EL1`, `TCR2_EL1`, `SCTLR_EL1`, `MAIR_EL1`, `VBAR_EL1`, `POR_EL1`, `PIR_EL1`, `PIRE0_EL1`, `GCSCR_EL1`, `GCSPR_EL1` (and their EL2 forms when the kernel runs at EL2, as it does where EL2 exists: [The fence](kernel-interface.md#the-fence-stopping-a-core)); the interrupt generation registers `ICC_SGI0R_EL1`, `ICC_SGI1R_EL1` and `ICC_ASGI1R_EL1`, writable at EL1 ([`ICC_SGI1R_EL1`](https://df.lth.se/~getz/ARM/SysReg/AArch64-icc_sgi1r_el1.html), mirror of Arm's register description): a fence signal and an ordinary interrupt to another core are the same instruction with different operands, so the scan forbids every write and the gate makes them, checking G10; the debug registers `DBGBCR<n>_EL1`, `DBGBVR<n>_EL1`, `DBGWCR<n>_EL1`, `DBGWVR<n>_EL1` and `MDSCR_EL1`, writable at EL1 ([`DBGWCR<n>_EL1`](https://df.lth.se/~getz/ARM/SysReg/AArch64-dbgwcrn_el1.html)), which could arm a watchpoint on another node's memory; the vector-length registers `ZCR_EL1` and `SMCR_EL1` (and their EL2 forms), which keep one length per kind (D-118), and the `MSR` immediates that change the streaming vector state, `SVCRSM`, `SVCRZA` and `SVCRSMZA` (the forms `SMSTART` and `SMSTOP`), for the same reason; the list is generated from Arm's AARCHMRS, every writable encoding and every `MSR` immediate classified once (D-125); `SMC` and `HVC`; `DC ISW`; implementation-defined system registers; the EL2 translation registers unless the image declares the hardening monitor.
-- **Firmware allow-list:** PSCI `CPU_ON` (only to a core `core_start` starts), `CPU_OFF` (own core), `AFFINITY_INFO`, `CPU_SUSPEND`, `SYSTEM_RESET2`, and at machine start-up `MIGRATE_INFO_TYPE` and `MIGRATE_INFO_UP_CPU` (to find the core of a resident Trusted OS); SDEI registration, unmasking, and `SDEI_EVENT_SIGNAL` (only to a core whose fence the caller drives). Refused, with every call not listed: `SDEI_PE_MASK` (0xC400002B), which would let a dying kernel mask SDEI event 0, the fence's signal (Arm DEN 0054C; Trusted Firmware-A then refuses the signal and drops the event, as the seventh review's verification read in its sources), and `SDEI_EVENT_DISABLE` and `SDEI_EVENT_UNREGISTER` of event 0, which would do the same.
+- **Forbidden outside the gate:** writes to `TTBR0_EL1`, `TTBR1_EL1`, `TCR_EL1`, `TCR2_EL1`, `SCTLR_EL1`, `MAIR_EL1`, `VBAR_EL1`, `POR_EL1`, `PIR_EL1`, `PIRE0_EL1`, `GCSCR_EL1`, `GCSPR_EL1` (and their EL2 forms when the kernel runs at EL2, as it does where EL2 exists: [The fence](kernel-interface.md#the-fence-stopping-the-cores-of-a-node)); the interrupt generation registers `ICC_SGI0R_EL1`, `ICC_SGI1R_EL1` and `ICC_ASGI1R_EL1`, writable at EL1 ([`ICC_SGI1R_EL1`](https://df.lth.se/~getz/ARM/SysReg/AArch64-icc_sgi1r_el1.html), mirror of Arm's register description): a fence signal and an ordinary interrupt to another core are the same instruction with different operands, so the scan forbids every write and the gate makes them, checking G10; the debug registers `DBGBCR<n>_EL1`, `DBGBVR<n>_EL1`, `DBGWCR<n>_EL1`, `DBGWVR<n>_EL1` and `MDSCR_EL1`, writable at EL1 ([`DBGWCR<n>_EL1`](https://df.lth.se/~getz/ARM/SysReg/AArch64-dbgwcrn_el1.html)), which could arm a watchpoint on another node's memory; the vector-length registers `ZCR_EL1` and `SMCR_EL1` (and their EL2 forms), which keep one length per kind (D-118), and the `MSR` immediates that change the streaming vector state, `SVCRSM`, `SVCRZA` and `SVCRSMZA` (the forms `SMSTART` and `SMSTOP`), for the same reason; the list is generated from Arm's AARCHMRS, every writable encoding and every `MSR` immediate classified once (D-125); `SMC` and `HVC`; `DC ISW`; implementation-defined system registers; the EL2 translation registers unless the image declares the hardening monitor.
+- **Firmware allow-list:** PSCI `CPU_ON` (only to a core whose word reads *joining* for a node the caller starts), `CPU_OFF` (own core), `AFFINITY_INFO`, `CPU_SUSPEND`, `SYSTEM_RESET2`, and at machine start-up `MIGRATE_INFO_TYPE` and `MIGRATE_INFO_UP_CPU` (to find the core of a resident Trusted OS); SDEI registration, unmasking, and `SDEI_EVENT_SIGNAL` (only to a core whose word names a node whose fence the caller drives and carries the fence mark). Refused, with every call not listed: `SDEI_PE_MASK` (0xC400002B), which would let a dying kernel mask SDEI event 0, the fence's signal (Arm DEN 0054C; Trusted Firmware-A then refuses the signal and drops the event, as the seventh review's verification read in its sources), and `SDEI_EVENT_DISABLE` and `SDEI_EVENT_UNREGISTER` of event 0, which would do the same.
 - **Interrupt routing is by memory-mapped registers, not by system registers.** An SPI is routed to a core by `GICD_IROUTER<n>` of the distributor, an LPI through the commands its ITS reads from a command queue in memory (`MAPD`, `MAPTI`, `MAPC`, `INV`, `SYNC`); both are MMIO regions mapped only in the gate view of the holder of the unit role of the distributor or of that ITS ([Roles](kernel-interface.md#roles)). The `ICC_*` system registers of the CPU interface only acknowledge, end, mask by priority and send SGIs; of those, the SGI registers are forbidden outside the gate (above), and the others act on the calling core only.
 - **Cost on ARM64:** every interrupt to another core, and every write of a debug or vector-length register, is a gate call. Not measured.
 
@@ -173,7 +160,7 @@ Further rules:
 - **Forbidden outside the gate** (scanned at every 2-byte offset): writes to `satp`, `stvec`, `ssp`, the hypervisor CSRs and `senvcfg`; `ECALL`; the shadow-stack stores; `CBO.INVAL`; the hypervisor fences and loads. The trigger registers of the debug specification (`tselect`, `tdata1` to `tdata3`) are reachable only from machine mode and debug mode under Sdtrig ([Sdtrig](https://docs.riscv.org/reference/debug/Sdtrig.html)), so supervisor code cannot arm them; where a delegation of triggers to supervisor mode exists, the kernel leaves it disabled. The vector length is a constant of the hart: no register to forbid.
 - **A store cannot be told apart by the scan:** an interrupt to another hart is a store to the ACLINT's software-interrupt registers ([ACLINT](https://github.com/riscvarchive/riscv-aclint/blob/main/riscv-aclint.adoc)) or to the target's IMSIC, and the APLIC's registers are a region every hart could store to. These regions are mapped only in the gate's own translation context, so a store to them outside the gate faults; the gate makes the store, checking G10 and the APLIC's unit role.
 - **Cost on RISC-V:** every interrupt to another hart is a gate call (a switch of `satp` to the gate's root and back). Not measured.
-- **Firmware allow-list:** SBI `hart_start` (only to a hart `core_start` starts), `hart_stop` (own hart), `hart_get_status`, `hart_suspend`, the timer, the IPI extension, `fence_hart` (only to a hart whose fence the caller drives), `SRST`.
+- **Firmware allow-list:** SBI `hart_start` (only to a hart whose word reads *joining* for a node the caller starts), `hart_stop` (own hart), `hart_get_status`, `hart_suspend`, the timer, the IPI extension, `fence_hart` (only to a hart whose word names a node whose fence the caller drives and carries the fence mark), `SRST`.
 
 **Measures to make before the mechanism is fixed** (gate-page-tables.md, part 9): whether the reference processor really has PKS, CET shadow stacks and IBT on both kinds of core; whether a page-table page typed as a shadow-stack page still serves the page walk and its accessed and dirty bits; the cost of a gate call and of a batch of *E* entries; the cost of CET on the null call, on IPC and on a switch of address space; the false positives of the scanner on the one-core kernel; a functional gate on ARM64 and RISC-V under QEMU, and their cycles on boards (an ARM64 board is bought when measures on ARM64 are wanted, D-120 point 4); fault injection showing that G3 to G7 stop what the check field misses; the cost of the audit of G14 on a node holding 64 GB.
 
@@ -186,14 +173,15 @@ Further rules:
 | Tables | `write_entry(table, index, value)` | the gate's write of one entry (G1); the value was checked by the common G3 code; re-read after the write where the mechanism needs it |
 | | `read_entry(table, index)` | a plain load |
 | | `invalidate_page(tag, address)`, `invalidate_tag(tag)`, `invalidate_all()` | done on this core when it returns |
+| | `invalidate_broadcast(tag, range)` | ARM64: a broadcast invalidation completed on every core of the inner shareable domain when it returns (`TLBI ...IS`, then `DSB ISH`); not used where the architecture has none: the other cores of the node are then sent the kernel's invalidation interrupt (D-129) |
 | | `load_root(table, tag)` | G7 checked by the common code |
 | | `type_table_page(page, class)` | where the gate's mechanism types a page (shadow-stack typing on x86-64); nothing elsewhere |
 | IOMMU | `iommu_write_context(unit, device, root, domain)`, `iommu_clear_context(unit, device)`, `iommu_invalidate(unit, domain, range)`, `iommu_wait(unit, deadline)` | the operations of a unit role's holder; `iommu_wait` returns "timed out" after the bound |
 | | `iommu_write_remap(index, entry)`, `iommu_invalidate_remap(unit, index)` | interrupt remapping |
 | Interrupts | `irq_mask(source)`, `irq_unmask(source)`, `irq_eoi(vector)` | constant work |
 | | `irq_route(source, core, vector)` | an IOAPIC entry, an APLIC target, an ITS mapping or `GICD_IROUTER<n>` |
-| | `send_ipi(core, kind)`, kind ordinary, fence signal or start | G10 checked by the common code |
-| Cores | `core_start(core, entry)`, `core_park_self()`, `core_stop_confirmed(core)` | INIT and SIPI, PSCI, SBI; the steps of [The fence](kernel-interface.md#the-fence-stopping-a-core) |
+| | `send_ipi(core, kind)`, kind ordinary (the kernel's reschedule, leave and invalidation interrupts to the cores of its node, and a ring's interrupt to another node), fence signal or start | G10 checked by the common code |
+| Cores | `core_start(core, entry)`, `core_park_self(request)`, `core_stop_confirmed(core, request)` | the stub's start request and an NMI, PSCI, SBI; the confirmation of a park request; the steps of [The fence](kernel-interface.md#the-fence-stopping-the-cores-of-a-node) |
 | Firmware | `firmware_call(call, arguments)` | the allow-list above; refused otherwise |
 | Time | `clock_now()`, `timer_set(deadline)`, `counter_frequency()` | monotonic |
 | Registers | `save_user_state(thread)`, `restore_user_state(thread)`, `save_vector_state(thread, mask)`, `restore_vector_state(thread, mask)`, `write_protected(register, value)` | the save area in the layout of `abi/`; a protected register through the gate (the debug and vector-length registers, ARM64's SGI registers) |
@@ -202,13 +190,13 @@ Further rules:
 | Entropy | `hardware_random()` | none if the processor has no readable source |
 | Debug | `console_write(bytes)`, `breakpoint_set(thread, slot, spec)` | the console only if the image declares one |
 
-### Core-by-core replacement
+### Node-by-node replacement
 
-The same path replaces the kernel core by core: a kernel update without a reboot. It relies on the versioned inter-kernel protocol and on versioned object formats.
+The same path replaces the kernel node by node: a kernel update without a reboot, by `node_stop` mode seal and `node_start` mode resume with the replacement image, on the same cores (the processes of that node pause meanwhile; a seal held longer than `SEAL_NS` is accused). It relies on the versioned inter-kernel protocol and on versioned object formats.
 
 ## Entropy
 
-**Decided, 14 November 2026.** The kernel has a random generator fed by the processor, the interrupts and the TPM (the machine's security chip). The generator is per node; user space reads it, and the user-space driver of the TPM feeds it, with `entropy_read` ([Entropy](kernel-interface.md#entropy)).
+**Decided, 14 November 2026.** The kernel has a random generator fed by the processor, the interrupts and the TPM (the machine's security chip). The generator is per physical core since D-129 (per node before); user space reads it, and the user-space driver of the TPM feeds it, with `entropy_read` ([Entropy](kernel-interface.md#entropy)).
 
 ## Hardware features
 
@@ -222,7 +210,7 @@ From the second delegated study of 14 November 2026 (not cross-checked; figures 
 | CET | To be required: it is what keeps a wild jump out of the middle of the write gate, and the first x86-64 mechanism of the gate types page tables as shadow-stack pages ([The write gate: mechanisms](#the-write-gate-mechanisms)) | Proposed, 16 November 2026 (D-120); present on the reference processor per its CPUID, to confirm on the machine |
 | PKS, POE | Optional accelerators of the write gate where present, never required | Proposed, 16 November 2026 |
 | Distinct core types | To be treated as lasting: Arm, Apple, Intel and AMD converge on it; the rumour of an Intel "unified core" around 2028 does not change this choice | Decided |
-| Per-core-type kernel binary | One kernel per core allows a binary tuned per core type. Low expected gain (kernel time is a small share): to keep only if measured | Aligned (retained) |
+| Per-core-type kernel binary | A node whose cores are all of one kind allows a binary tuned per core type. Low expected gain (kernel time is a small share): to keep only if measured | Aligned (retained) |
 | User interrupts (xUI, ASPLOS 2025; Aeolia, SOSP 2025) | Deliver an event to a component without entering the kernel. Not in version 1: no machine of the project has them; the hook is placed in the contract (a feature bit and a word of the register block, [User interrupts](kernel-interface.md#user-interrupts-a-placed-hook)) | Proposed, 16 November 2026 |
 
 Rejected, from the same study: a single address space shared between components and separated by protection keys (it contradicts the rule of one process per publisher, and user-mode keys can be modified by the code); a language model in the kernel.

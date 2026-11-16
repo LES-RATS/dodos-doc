@@ -45,7 +45,7 @@ Every component of the system restarts or is replaced without rebooting the mach
 
 - **Driver**: see [drivers.md](drivers.md#restart-of-a-driver).
 - **Service**: its durable state lives in storage and in the persistent handle table. Clients receive the error `gone` or reconnect, which rule 1 of the [ABI](wasm-abi.md#abi-rules) already requires them to handle.
-- **Kernel**: its own mechanism; see [kernel.md](kernel.md#core-by-core-replacement).
+- **Kernel**: its own mechanism; see [kernel.md](kernel.md#node-by-node-replacement).
 - **Cost**: a pause, not a freeze. The pause is visible when it concerns the system disk or the GPU.
 
 ## Crash and shutdown
@@ -58,7 +58,7 @@ Principle: shutdown and crash follow the same path ("crash-only" software, Cande
 |---|---|
 | A component or a service falls | Restart as above. A service reloads its state from storage; an application has the state it saved through `suspend` |
 | Power cut | Blobs are immutable and consistency comes from the SQLite journal (see [storage.md](storage.md#on-disk-format)), so there is no disk check at reboot. Modifiable objects are versioned. The periodic snapshot of processes, which would bound the loss to a few seconds of input (interval to set), is deferred until after the alpha |
-| Panic of one core's kernel | The kernel restarts alone and the machine continues; see [kernel.md](kernel.md#recovery-of-one-cores-kernel) |
+| Panic of one core's kernel | The kernel restarts alone and the machine continues; see [kernel.md](kernel.md#recovery-of-one-node) |
 | Hang | A hardware watchdog (who arms it is open: the kernel contract recommends the platform service, fed by the service manager, since the kernel reads no table that describes it, D-112; see [Open points](kernel-interface.md#open-points)); a heartbeat per service, watched by the service manager; the hang of one core's kernel is detected by the cores group ([Detection](kernel-interface.md#detection-evidence-not-opinion)) |
 | Reboot loop | A/B/R slots, automatic rollback (see [storage.md](storage.md#updates)) |
 | Requested shutdown | Decided, 14 November 2026: the system calls `suspend` on the running applications with a bounded delay (starting value 500 ms, to calibrate), calls `sync` on storage, then powers off. A crash skips the first step; that is the only difference between shutdown and crash. Devices are reset at boot, not at shutdown |

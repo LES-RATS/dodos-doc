@@ -4,9 +4,9 @@ Statuses are defined in the [README](../README.md#status-legend). Unless a line 
 
 The mechanism is in the kernel and the policy is in user space.
 
-## Mechanism in each core's kernel
+## Mechanism in each node's kernel
 
-- Each kernel has one local run queue, without locks.
+- Each physical core of a node has its own queues; a node of several cores shares its objects under locks (D-128, D-129, [A node of several cores](kernel-interface.md#a-node-of-several-cores)).
 - A thread runs only if it holds a **scheduling context**: a kernel object designated by a capability, which carries a budget, a period, a deadline, a slack class and the set of cores where it may be placed (model of seL4 MCS). Which kind of core a context goes to is the placement service's choice, expressed by that set ([Unlike cores](kernel-interface.md#unlike-cores)).
 - The kernel picks the nearest deadline among the contexts that still have budget, and gives the time that none of them wants to throttled contexts, by class (D-110, see [What runs next](kernel-interface.md#what-runs-next)).
 - The kernel moves a thread only within the set of cores that the placement service has authorised for it (**Decided**, 14 November 2026).
@@ -63,10 +63,10 @@ The placement service runs in user space.
 
 ### Core load
 
-- **Measurement.** Each kernel knows the exact load of each context, because it debits the budgets. It gives it per context by `sched_read` (with the instructions retired, on demand: D-118) and per core by `core_status` (D-110); a page listing every context could not have a fixed size. There is no statistical estimate as in Linux.
-- **Two speeds.** Reflex in the kernel: a core with no work sleeps, and under low load the nodes of several cores are parked on one core (D-108); the kernel moves no thread by itself (D-115 proposal of 16 November 2026: a thread object never changes node, so a move is `thread_move`, [Unlike cores](kernel-interface.md#unlike-cores)). Policy in user space: the placement service rebalances, groups, chooses core types and moves threads within the set of cores it authorised, on the scale of a few periods.
-- **Frequency.** In version 1, only per-class preferences are set: on Intel, the hardware sets the frequency itself (HWP, from memory), and the system gives it, per core, the bounds and the energy or performance preference according to the class; the preference is set per core with `core_perf` ([Cores](kernel-interface.md#cores)), not at each switch of context (D-110). On-demand frequency is deferred until after the alpha (**Decided**, 14 November 2026). The deferred proposal: deadlines are known, so the frequency of a core is chosen to finish the budget just before the deadline, instead of reacting to load after the fact; a user input raises the frequency of the frame path before the load arrives.
-- **Cores on demand.** Deferred until after the alpha (**Decided**, 14 November 2026). The deferred proposal: the number of active kernels follows the load (see [kernel.md](kernel.md#dynamic-structure)).
+- **Measurement.** Each kernel knows the exact load of each context, because it debits the budgets. It gives it per context by `sched_read` (with the instructions retired, on demand: D-118) and per core by `node_status` (D-110, D-129); a page listing every context could not have a fixed size. There is no statistical estimate as in Linux.
+- **Two speeds.** Reflex in the kernel: a core with no work sleeps in place, and no node runs on another node's core (D-128); the kernel moves no thread by itself, and a thread never leaves its node (inside its node, the placement service moves its context with `sched_configure`: [A node of several cores](kernel-interface.md#a-node-of-several-cores)). Policy in user space: the placement service rebalances, groups, chooses core types and moves threads within the set of cores it authorised, on the scale of a few periods.
+- **Frequency.** In version 1, only per-class preferences are set: on Intel, the hardware sets the frequency itself (HWP, from memory), and the system gives it, per core, the bounds and the energy or performance preference according to the class; the preference is set per core with `node_perf` ([Cores](kernel-interface.md#cores)), not at each switch of context (D-110). On-demand frequency is deferred until after the alpha (**Decided**, 14 November 2026). The deferred proposal: deadlines are known, so the frequency of a core is chosen to finish the budget just before the deadline, instead of reacting to load after the fact; a user input raises the frequency of the frame path before the load arrives.
+- **Cores on demand.** Nodes that take and give cores at run time are deferred until after the alpha (**Decided**, 14 November 2026) and enter the contract only once the conditions of its open point hold (D-128). In version 1 the placement service sizes each node when it starts (see [kernel.md](kernel.md#dynamic-structure)).
 - **Hardware hints** on the nature of each thread (Intel Thread Director, AMD's workload classification): one more input for the placement service, which the kernel records per context when the placement service counts it (`sched_count`, [Unlike cores](kernel-interface.md#unlike-cores)), with the instructions retired (D-118).
 - **Hardware threads.** Two hardware threads of one physical core never serve two different publishers at the same time (side channels). In version 1 the second thread stays idle (see [kernel.md](kernel.md#multi-core-structure)).
 
@@ -85,15 +85,13 @@ The case: a background client is inside the service when a frame-class client ar
 3. **Threshold on entry.** Not in the kernel either (D-110). A call enters only if the remaining budget covers the declared worst case of the call (the latency contract of the capability); otherwise it waits outside for its budget to be refilled. seL4 MCS has this problem open, and the same remedy as a proposal (RFC-14, budget thresholds on endpoints, not merged to the project's knowledge; read through a search summary, merge state not verified).
 4. **Exhaustion all the same.** Exhaustion raises nothing in the kernel: the context waits for its next period (D-110). A server thread that loses the context it ran on raises the fault *no context* to its supervisor ([The budget follows the call](kernel-interface.md#the-budget-follows-the-call)); the request is cancelled and the service returns to its previous state. Cancellable requests are required only of the project's own native services (**Decided**).
 
-## Core group of a multithreaded process
+## A multithreaded process
 
-**Proposed, 14 November 2026.** The meaning of "core group" is the one decided in [kernel.md](kernel.md#multi-core-structure).
+**Revised, 16 November 2026 (D-128).** The core group of 14 November 2026, a process spread over several per-core kernels, is gone: a process lives in one node, and a process with threads on several cores lives in a node of several cores ([kernel.md](kernel.md#multi-core-structure)).
 
-- A process holds a core group: the set of cores where its address space is active. Operations on the address space (mapping, revocation, TLB invalidation) concern only that group.
-- The placement service grows or shrinks the group according to the load.
-- The budget is a reserve of the group, from which each per-core context draws slices.
-- A group is of a single core type by default. A budget is in nanoseconds of the core the context runs on, and the kernel scales nothing across unlike cores; a move to another kind may carry new parameters (`thread_move`).
-- The kernel notifies the runtime of the number of cores it has at that moment, so that the runtime sizes its threads instead of overloading (idea of scheduler activations, from memory).
+- The placement service starts a node of the size a process needs (from its manifest), on free cores, and the process's objects are made from that node's memory. The node's cores are fixed until it ends; growing or shrinking a node while it runs is deferred (above).
+- Each context is placed on one core of the node, in its cores set, and admitted there; the placement service moves contexts between the node's cores with `sched_configure`. The budget is per context, in nanoseconds of the core it runs on; the kernel scales nothing across unlike cores. A node may hold cores of several kinds that share their state features and vector lengths.
+- The kernel notifies the runtime of the number of cores its node has, so that the runtime sizes its threads instead of overloading (idea of scheduler activations, from memory).
 - A thread preempted while it holds a lock: the waiter lends it its context, by the same lending mechanism as above (not in the kernel, D-110).
 
 ## Time spent in interrupts
