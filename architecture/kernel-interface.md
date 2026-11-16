@@ -190,7 +190,7 @@ A new thread is suspended and bound to nothing.
 
 ### IPC
 
-A thread is in one of these states: ready, waiting to be received (after `call`, in the queue of an endpoint), waiting for a reply, waiting to receive, waiting on a notification.
+A thread is in one of these states: ready, waiting to be received (after `call`, in the queue of an endpoint), waiting for a reply, waiting to receive, waiting on a notification. Two more waits hold no queue of an object: **waiting for another node**, for the answer of a `node_send`, of a revocation step or of a unit request ([What crosses between nodes](#what-crosses-between-nodes)), which ends at the answer or with `gone` when that node is accused; and **waiting for its node's cores**, for other cores of the thread's node to acknowledge an invalidation or to leave a thread ([A node of several cores](#a-node-of-several-cores)). `thread_cancel` ends neither: both are bounded.
 
 The `reply` object is supplied by the server, because the kernel has no memory of its own (rule 3). It is **idle**, **attached** to a thread that waits to receive, or **armed** with one caller.
 
@@ -840,7 +840,7 @@ Effect of `memory_give`: the capability is removed, its slot becomes empty and t
 - **Destruction of a block**, by any removal, unmaps a run from the kernel's own space and writes *free* (this node, or the reserve's code) into its words, through the gate, after the gate's checks of a give (map counts 0; if one is not, the step returns `again` while the translations are removed): one unit of the 32 of a step. Removing the root capability of a `memory_control` removes the blocks taken through it, then the object; the node takes no block until it is started again.
 - **Bounds.** Each call reads and writes at most *E* words and *E* entries of the kernel's own tables, and does at most one local invalidation. None returns `again`.
 - **A kernel that dies in a transfer.** Each word is resolved alone. A word *free* (Y) is Y's; a word taken by a dead generation is free; a word that a giver had not yet written stays the giver's, and is free once the giver is dead. A run cut by a crash belongs to two nodes; the memory services reconcile by reading the table (slot 13).
-- **What stays with the memory service:** where a process's memory comes from (its home node, to which it moves chunks before it makes the process's frames), the split between movable runs and runs pinned by kernel objects or by DMA, migration, compression and preloading.
+- **What stays with the memory service:** where a process's memory comes from (the node it lives in, to which it moves chunks before it makes the process's frames), the split between movable runs and runs pinned by kernel objects or by DMA, migration, compression and preloading.
 
 #### The write gate
 
@@ -1640,7 +1640,7 @@ The tables above fix the arguments and results of each call. Which register or w
 
 ## Memory outside the kernel
 
-**Decided, 14 November 2026.** The kernel knows frames and mappings, nothing else. A single memory service in user space owns the policy for every core, so memory moves between the per-core kernels by one decision in one place. Memory that is already mapped costs nothing more. The extra cost is on faults only: one IPC round trip to the memory service instead of a path inside the kernel.
+**Decided, 14 November 2026.** The kernel knows frames and mappings, nothing else. A single memory service in user space owns the policy for every core, so memory moves between the nodes by one decision in one place. Memory that is already mapped costs nothing more. The extra cost is on faults only: one IPC round trip to the memory service instead of a path inside the kernel.
 
 Why this stays cheap here:
 
@@ -2117,4 +2117,3 @@ The Zig part holds about 4,000 to 6,000 lines per architecture (an estimate from
 - **The end of interrupt of a level line from any node** relies on the IOAPIC's EOI register and on the suppression of the broadcast end of interrupt, which have little field use: to test on the Dell and the reference desktop before lines are claimed from nodes that do not hold the IOAPIC's role.
 - **The models of the multi-node part** (D-027): the reference model of the shape of D-128 and D-129, then the three models checked by state exploration, as restated in [Changes for `abi/` and the model](#changes-for-abi-and-the-model-d-128-d-129).
 - **What the reference model does not cover after pass 14** (16 November 2026, D-127), so these rules have no executable check yet: everything D-128 and D-129 changed (nodes of several cores, core words, the fence of every core of a node, the twelve message kinds and their rings, `node_send` and `grant_signal`, the per-core interrupt tables and debug areas, the renamed calls), which the next pass covers by the list of [Changes for `abi/` and the model](#changes-for-abi-and-the-model-d-128-d-129); and, from before: the exception tables of ARM64 and RISC-V beyond `abi/` (the model raises x86-64 faults only); the hand-over block of D-125 (the model starts from a description of the machine, not from a block); the time recovery takes; console output; DMA faults; the debugger stub; the contents of vector state and of a crash record; requests to the holder of an IOAPIC's role.
-
