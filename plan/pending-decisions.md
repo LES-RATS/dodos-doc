@@ -8,6 +8,27 @@ A booklet for the two owners: every question the documents leave open, put so th
 
 **Where the lines come from.** Line numbers are those of 16 November 2026. Two files move while this booklet is written: `architecture/kernel-interface.md` and `architecture/kernel.md` are being rewritten by pass 14B, so their lines can shift; search for the section named. Two sources are not yet on the `main` branch of this repository: the new [security.md](../architecture/security.md) with the threat model, the security model of the agent and its fourteen "Points for the two owners" (commit `af51cc5` on `origin/main`, lines cited from that version), and the Step 0 revision of the WIT contracts in the system repository (pull request 1 of `Vehicoule/DodOS`, branch `step0-contracts`, commit `aab7417`, cited as `DodOS: contracts/<file>:<line>`).
 
+## Answers received
+
+Answers given by one owner on 16 November 2026 (recorded in the decision log as D-132; the second owner has not yet confirmed those marked "Both" in the table below).
+
+| No. | Answer | Note |
+|---|---|---|
+| P-004 | A: require CET | Given on the condition that CET is old and widely supported. On Intel it starts with the 11th generation (Tiger Lake, 2020); the reading of the reference desktop (P-002) confirms |
+| P-005 | A: the split of D-126 | The owner asked for B only if it showed a real gain; the Zig study and its verification show none |
+| P-006 | A | |
+| P-007 | B: the USB debug capability | It needs an xHCI controller that offers the capability and a USB 3.0 A-to-A debug cable; if either is missing on the desktop, the serial port of option A is the fallback, decided at the machine |
+| P-008 | A | |
+| P-009 | A | |
+| P-010 | A (no signal) | |
+| P-011 | A | |
+| P-012 | A | |
+| P-013 | A, on the assistant's advice | Research axis 4 is to be reworded |
+| P-019 | A: Verus and Kani, Flux not adopted | |
+| P-020 | C: group by group, on the assistant's advice | A group is accepted once it has passed its review |
+| P-021 | B: pull request 3 waits for the model pass of D-128 and D-129 | Pull request 5 (the licence of `abi/`) was not answered separately |
+| P-085, P-086 | Done in practice | The owner authorised Step 0 on GitHub: the template repository and the rulesets exist; the merge queue waits for the transfer to an organisation, which the owner will create |
+
 ## Table of entries
 
 | No. | Question, shortened | Who answers | Recommendation | Sureness | Blocks |
