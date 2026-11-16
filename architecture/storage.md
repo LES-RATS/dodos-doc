@@ -61,7 +61,7 @@ Notes:
 - Factory reset: erase the device and user zones.
 - Embedded: system and device zones only.
 - Start-up order: the boot image reads the system zone, which is not encrypted; the service manager starts the TPM driver and the key service from it; the key service unseals the device key and opens the device zone; the user's code then opens the user key.
-- Marks: a read from the user, application, snapshot or device zone adds the mark `private`, whoever wrote the data; cache and ephemeral objects keep their writer's marks; system and package blobs carry none (**Proposed**, 16 November 2026; [security.md](security.md#provenance-marks)).
+- Marks: a read from the user, application, snapshot or device zone adds the mark `private`, whoever wrote the data; cache and ephemeral objects keep their writer's marks; system and package blobs take no `private`, and `untrusted` follows their writer and origin; a collection bound to an action call marks the call by its zone the same way (**Proposed**, 16 November 2026; [security.md](security.md#provenance-marks)).
 
 ## Blobs
 

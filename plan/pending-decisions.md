@@ -651,7 +651,7 @@ Answers given by one owner on 16 November 2026 (recorded in the decision log as 
 
 ## Group 3 — Security
 
-The points of this group come from the new [security.md](../architecture/security.md) (on `origin/main`, commit `af51cc5`), whose "Points for the two owners" (lines 312-329) give fourteen points with a recommendation each; their sources were verified on 16 November 2026 (line 132). The three items of P-036, P-037 and P-042 are also marked `OPEN (owners)` in the contracts. Points 15 to 28 were added later on 16 November 2026, from the reviews of the WIT contracts and of the security page and their verifications: P-092 to P-103, and updates to P-049, P-052 and P-055; most are also marked `OPEN (owners)` in the contracts.
+The points of this group come from the new [security.md](../architecture/security.md) (on `origin/main`, commit `af51cc5`), whose "Points for the two owners" give fourteen points with a recommendation each; their sources were verified on 16 November 2026 (the "Sources" line of "Security model of the agent"). The three items of P-036, P-037 and P-042 are also marked `OPEN (owners)` in the contracts. Points 15 to 28 were added later on 16 November 2026, from the reviews of the WIT contracts and of the security page and their verifications: P-092 to P-103, and updates to P-049, P-052 and P-055; most are also marked `OPEN (owners)` in the contracts.
 
 ## P-035 — What the threat model leaves out
 
@@ -903,9 +903,9 @@ The points of this group come from the new [security.md](../architecture/securit
 
 **Question.** Is the disk key sealed in the TPM against the system's signing key rather than against the system's hash, so that an update does not break unlocking?
 
-**Where.** [security.md](../architecture/security.md) line 54, Proposed. "TPM and secure boot: the mechanisms are known but were not re-read" (line 60; [verification-status.md](../research/verification-status.md) line 55).
+**Where.** [security.md](../architecture/security.md) line 54, Proposed. "TPM and secure boot: the mechanisms are known but were not re-read" (line 60; [verification-status.md](../research/verification-status.md) line 55); option C's write authority: `reviews/2026-11-16-security-review-2-verify-deepseek-by-mistral.md` finding 7.
 
-**Options.** A. Against the signing key. Costs: any image signed by the project unlocks the disk, including an old one with a known flaw (TCG, TPM 2.0 Library Part 1, `TPM2_PolicyAuthorize`: every policy signed with the key satisfies it). B. Against the hash. Costs: every update needs the recovery key or a re-seal step. C. Against the signing key and a minimum version in a TPM NV index raised by security updates (`TPM2_PolicyAuthorizeNV`, or a counter). Gives: updates do not break unlocking, and an old signed image no longer unlocks. Costs: one NV index and one write per security update.
+**Options.** A. Against the signing key. Costs: any image signed by the project unlocks the disk, including an old one with a known flaw (TCG, TPM 2.0 Library Part 3: Commands, `TPM2_PolicyAuthorize`: every policy signed with the key satisfies it). B. Against the hash. Costs: every update needs the recovery key or a re-seal step. C. Against the signing key and a minimum version in a TPM NV index raised by security updates (`TPM2_PolicyAuthorizeNV`, or a counter). The index is written only under a policy that the signed system satisfies during an update, authorised by the same signing key that authorises the PCR policy: an old image that merely boots holds no such authorisation and cannot lower it. Gives: updates do not break unlocking, and an old signed image no longer unlocks. Costs: one NV index and one write per security update; to verify on the desktop's Intel fTPM (NV indexes or counters, `TPM2_PolicyAuthorizeNV`). If that write authority cannot be built, an old signed image can lower a plain index, C then equals A, and A is the fallback.
 
 **Recommendation.** C (security.md point 24; the mechanism was read at the TCG source by the security review's verifier on 16 November 2026). *Leaning.*
 
@@ -949,10 +949,10 @@ The points of this group come from the new [security.md](../architecture/securit
 
 **Question.** Which data carries `private`? Today no rule says so: a file an application saved outside any task carries no mark, so reading the user's files never marks a task `private`, and the one cell of the matrix that depends on it (an external read in a task marked `private` and `untrusted`) never fires.
 
-**Where.** [security.md](../architecture/security.md), "Provenance marks" and point 15; `DodOS: contracts/core.wit` (`provenance`, `OPEN`), `contracts/store.wit` (`object-info`); found by three reviewers (`reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N9, `security-review-1-verify-hydrogen-by-opus.md` N1, `security-review-1-verify-deepseek-by-mistral.md` finding 1).
+**Where.** [security.md](../architecture/security.md), "Provenance marks" and point 15; `DodOS: contracts/core.wit` (`provenance`, `OPEN`), `contracts/store.wit` (`object-info`); found by three reviewers (`reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N9, `security-review-1-verify-hydrogen-by-opus.md` N1, `security-review-1-verify-deepseek-by-mistral.md` finding 1); second round: `security-review-2-verify-deepseek-by-mistral.md` finding 2, `wit-review-2-verify-hydrogen-by-deepseek.md` finding 2.
 
 **Options.**
-- **A. By zone, at read.** The storage service adds `private` to every read from the user, application, snapshot and device zones; cache and ephemeral keep the writer's marks; system and packages none; `untrusted` follows the writer and the origin. Gives: the matrix's cell fires on the user's data, including data already stored. Costs: almost every task that touches the user's data or an application's `home` is `private`; once also `untrusted` (P-037, P-042 make that frequent), every external read is confirmed, and a remote model without leave for private data is refused.
+- **A. By zone, at read.** The storage service adds `private` to every read from the user, application, snapshot and device zones; cache and ephemeral keep the writer's marks; system and packages no `private`; `untrusted` follows the writer and the origin; a collection bound to a call marks it by its zone; every route out of a surface (accessibility tree, a selection copied or cut, an item dragged out, a capture) adds `private` always and `untrusted` unless the owner is the system, and a store object leaving that way keeps its own marks too. Gives: the matrix's cell fires on the user's data, including data already stored and data copied off the screen. Costs: almost every task that touches the user's data or an application's `home` is `private`; once also `untrusted` (P-037, P-042 make that frequent), every external read is confirmed, and a remote model without leave for private data is refused; a task that began with a pasted public page pays one confirmation per external read.
 - **B. By writer, as today.** Gives: no confirmation added. Costs: the confirmation D-036 relies on almost never appears.
 - **C. The application zone only when its manifest asks.** Gives: fewer confirmations for feed readers, weather or maps. Costs: an application that forgets leaves its secrets unmarked, and the producer decides, against "never by the producer".
 - **D. Downloads excluded.** Gives: fewer confirmations after reading public files. Costs: a downloaded bank statement is unmarked unless the user marks it.
@@ -965,17 +965,17 @@ The points of this group come from the new [security.md](../architecture/securit
 
 ## P-093 — A local write of a package that holds the network (security point 16)
 
-**Question.** An action of change `reversible`, reach `local`, writes into `home`; the long-lived instance of the same package holds the right "network", runs outside any task, and can send what was written. How is that kept from defeating the matrix?
+**Question.** An action of change `reversible`, reach `local`, writes into `home`, a kept item or a bound item with `write`; the long-lived instance of the same package holds the right "network" and runs outside any task, or another action of the package has hosts and reads `home`; either can send what was written. How is that kept from defeating the matrix?
 
-**Where.** [security.md](../architecture/security.md), "Effect class" and point 16; `DodOS: contracts/core.wit` (`world service`, `OPEN`), `contracts/actions.wit` (`invoke`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N1 and C2, and the alternatives table of `wit-review-1-verify-opus-new-findings-by-hydrogen.md` ("Deep comparison").
+**Where.** [security.md](../architecture/security.md), "Effect class" and point 16; `DodOS: contracts/core.wit` (`world service`, `OPEN`), `contracts/actions.wit` (`invoke`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N1 and C2, and the alternatives table of `wit-review-1-verify-opus-new-findings-by-hydrogen.md` ("Deep comparison"); second round: `security-review-2-verify-deepseek-by-mistral.md` findings 1 and 3, `wit-review-2-verify-hydrogen-by-deepseek.md` finding 1.
 
 **Options.**
-- **A. In a task marked `untrusted`, decided as an external modification** (confirmed, held, counted in the external budget, not undoable once done); automatic in an unmarked task. Gives: no silent path in a marked task. Costs: confirmations for the writes of networked applications in marked tasks; the residual of a hostile local model in an unmarked task stays, stated in the threat model.
+- **A. In a task marked `untrusted`, decided as an external modification** (confirmed, held, counted in the external budget, not undoable once done), for every package that can reach the network (the right "network", or hosts on any of its actions), on the class at `invoke` whatever the instance then writes to; automatic in an unmarked task. Gives: no silent path in a marked task, including the two-step path of a local write then an external action of the same package. Costs: confirmations for the writes of networked applications in marked tasks; the residual of a hostile application, or a hostile local model, in an unmarked task stays, stated in the threat model.
 - **B. The same in every task.** Costs: every edit of a syncing application asks (a note saved, an event added; five items checked are five confirmations), even with no mark.
 - **C. A read-only or separate `home` for action instances.** Gives: no confirmation. Costs: stateful actions of networked applications break (mail drafts, an application's own database, an MCP adapter's token).
 - **D. The network service refuses a request from a sender marked `private` and `untrusted` unless the task service confirmed.** Gives: no confirmation at `invoke`. Costs: the confirmation would carry no typed input, only a raw request; an honest application loses background sync after any marked edit, since its long-lived instance takes the marks of what it reads.
 
-**Proposed today.** A, with a known limit: an instance of reach `external` reads its own `home` after the matrix decided and may send it to its own hosts, which its long-lived instance can do anyway.
+**Proposed today.** A, with a known limit: an instance of change `none` and reach `external` can send its own `home` to the hosts of the action (it gets no `keep`, P-094); what entered `home` from a marked task was confirmed under A.
 
 **Recommendation.** A. *Leaning*: it reopens a line of security.md that rests on D-035.
 
@@ -985,10 +985,10 @@ The points of this group come from the new [security.md](../architecture/securit
 
 **Question.** The fresh instance of an action imports `keep`, the component's table of kept capabilities. What may it do with it?
 
-**Where.** [security.md](../architecture/security.md) point 17; `DodOS: contracts/core.wit` (`world service`), `contracts/store.wit` (`keep`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` finding 1 and C3, `wit-review-1-verify-hydrogen-by-deepseek.md` finding 1.
+**Where.** [security.md](../architecture/security.md) point 17; `DodOS: contracts/core.wit` (`world service`), `contracts/store.wit` (`keep`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` finding 1 and C3, `wit-review-1-verify-hydrogen-by-deepseek.md` finding 1; second round: `wit-review-2-verify-hydrogen-by-deepseek.md` finding 1.
 
 **Options.**
-- **A. Read only**: `get` and `slots`, `get` attenuated to the class, `put` and `forget` refused. Gives: nothing the request carried outlives the instance; an action can use a capability the application kept. Costs: none in confirmations.
+- **A. Read only**: `get` and `slots`, `get` attenuated to the class, `put` and `forget` refused; in an instance of change `none` and reach `external`, every call refused. Gives: nothing the request carried is kept as a capability (what the instance writes is P-093's subject); an action can use a capability the application kept, except one that only reads from outside, which was the one way a folder the user picked reached an instance that can send without marking the call. Costs: none in confirmations.
 - **B. `keep` refused entirely.** Gives: the instance holds strictly what its request carries. Costs: an action cannot use a folder the user picked once; the request must carry it.
 
 **Recommendation.** A. *Firm.*
@@ -999,10 +999,10 @@ The points of this group come from the new [security.md](../architecture/securit
 
 **Question.** A secret field can feed any property of an action, and a reversible local action that receives the password runs unconfirmed and writes it into the journal. What are the rules?
 
-**Where.** [security.md](../architecture/security.md), "Confirmation matrix" and point 18; `DodOS: contracts/catalog.wit` (`field`), `contracts/manifest.wit` (`os-secret`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N2 and C1 with Hydrogen's amendment, `security-review-1-verify-deepseek-by-mistral.md` C2.
+**Where.** [security.md](../architecture/security.md), "Confirmation matrix" and point 18; `DodOS: contracts/catalog.wit` (`field`), `contracts/manifest.wit` (`os-secret`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N2 and C1 with Hydrogen's amendment, `security-review-1-verify-deepseek-by-mistral.md` C2; `wit-review-2-verify-hydrogen-by-deepseek.md` finding 3.
 
 **Options.**
-- **A.** A secret field feeds only a property marked `os-secret`, judged on the tree an update leaves; an action that receives a secret is confirmed whatever its class, the secret shown masked and written as null in the journal; a secret field on the agent's overlay is refused while the task is marked `untrusted`. Costs: one confirmation per secret handed over; the grant for the rest of a task covers repeats in an unmarked task.
+- **A.** A secret field feeds only a property marked `os-secret`, judged on the tree an update leaves; an action that receives a secret is confirmed whatever its class, the secret shown masked and written as null in the journal; a secret field on the agent's overlay is refused while the task is marked `untrusted`, needs at least one button that reads it, and stops answering once the task is marked; a literal for an `os-secret` property in the call's input is refused (`invalid`); on an application's own surface the owner receives its own secret field's value in the event (the user typed it for that application), and the system never journals it, never gives it to the agent, and never exposes it through `accessibility`. Costs: one confirmation per secret handed over; the grant for the rest of a task covers repeats in an unmarked task.
 - **B. The matrix alone, as before.** Costs: a password reaches a reversible local action unconfirmed.
 
 **Recommendation.** A. *Firm.*
@@ -1106,10 +1106,10 @@ None changes the number of confirmations.
 
 **Question.** The user allows an action for the rest of an unmarked task; the task is marked `untrusted` afterwards. Does the grant survive, and what does it cover?
 
-**Where.** [security.md](../architecture/security.md), "Proposed rules for the confirmation itself" and point 27; `DodOS: contracts/actions.wit` (`invoke`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` finding 5 and C4, `security-review-1-verify-hydrogen-by-opus.md` N10, `security-review-1-verify-deepseek-by-mistral.md` C8.
+**Where.** [security.md](../architecture/security.md), "Proposed rules for the confirmation itself" and point 27; `DodOS: contracts/actions.wit` (`invoke`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` finding 5 and C4, `security-review-1-verify-hydrogen-by-opus.md` N10, `security-review-1-verify-deepseek-by-mistral.md` C8; second round: `wit-review-2-verify-hydrogen-by-deepseek.md` finding 2.
 
 **Options.**
-- **A. The grant ends when the task takes the mark**; an object argument is pinned to its version; a call that binds a collection always asks. Costs: one more confirmation in a task marked after the grant.
+- **A. The grant ends when the task takes the mark**; an object argument is pinned to its version; a call that binds a collection is never covered by the grant and asks when the matrix asks. Costs: one more confirmation in a task marked after the grant.
 - **B. The grant survives the mark.** Costs: injected steps can repeat the call unconfirmed.
 
 **Recommendation.** A. *Firm.*
