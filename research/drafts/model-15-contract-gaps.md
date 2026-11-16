@@ -1,6 +1,6 @@
 # Contract gaps found by the model of pass 15
 
-**Settled by pass 16 (D-133, Docs commit that adds this line): every gap below is written into `architecture/kernel-interface.md` at its place, marked "gap *n*". Gaps 7 and 12 were settled otherwise than the model's reading; the layout of gap 3 corrects the summary below (a `Send` of 64 words with 4 grants takes 10 entries, a `Report` of 28 items 11).**
+**Settled by pass 16 (D-133, Docs commit `22878a1`): every gap below is written into `architecture/kernel-interface.md` at its place, marked "gap *n*". Gaps 7 and 12 were settled otherwise than the model's reading; the layout of gap 3 corrects the summary below (a `Send` of 64 words with 4 grants takes 10 entries, a `Report` of 28 items 11).**
 
 The executable model of `dodos-kernel` (branch `model`) was rewritten for the new shape of nodes (D-128, D-129, D-131) against `architecture/kernel-interface.md` as it stood at commit `a0a6947`. Where the contract is silent, ambiguous or contradicts itself, the model implements one reading and marks it in its code with a comment that starts `CONTRACT-GAP` and the number below. Each entry gives the sentence with its line, the case it does not settle, the readings, the one implemented and why, and the text proposed. Nothing here is decided: these are proposals for the owners.
 
