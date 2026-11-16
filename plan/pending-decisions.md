@@ -162,9 +162,9 @@ Answers given by one owner on 16 November 2026 (recorded in the decision log as 
 
 **Question.** Which exact processor is in the reference desktop, and do all its cores really have CET (shadow stacks and indirect-branch tracking), PKS and FRED?
 
-**Where.** [decisions/README.md](../decisions/README.md) D-116 point 4 (line 126): "probably an Intel Core i5-14600KF … to confirm"; [kernel.md](../architecture/kernel.md) line 207 (FRED presence: Open), line 210 (CET: "present … per its CPUID, to confirm on the machine"), line 120 onward (PKS: "The reference processor's CPUID says present while Intel support said 13th-generation parts lack it: to test on the machine").
+**Where.** [decisions/README.md](../decisions/README.md) D-116 point 4 (line 126): "probably an Intel Core i5-14600KF … to confirm"; [kernel.md](../architecture/kernel.md) line 207 (FRED presence: Open), line 210 (CET: "present … per its CPUID, to confirm on the machine"), line 120 onward (PKS: `IA32_PKRS` is in the SDM's table of 12th and 13th-generation hybrid MSRs, volume 4 Table 2-46 of order 325462-093, while Intel support said 13th-generation parts lack PKS: to test on the machine).
 
-**What to measure.** On the desktop, from a boot image that runs on every core in turn: the model name and stepping; the CPUID bits of CET shadow stacks, IBT, PKS and FRED on each performance core and each efficiency core; then enable shadow stacks, IBT and PKS on each core and check that they work, since a CPUID bit alone was already contradicted for PKS. FRED is deferred after the alpha (D-065) and is recorded only.
+**What to measure.** On the desktop, from a boot image that runs on every core in turn: the model name and stepping; the CPUID bits of CET shadow stacks, IBT, PKS and FRED on each performance core and each efficiency core; then enable shadow stacks, IBT and PKS on each core and check that they work, since a CPUID bit alone was already contradicted for PKS; supervisor shadow stacks only once `CPUID.07H.01H:EDX.CET_SSS[18]` is read, since `WRSSQ` at ring 0 needs them on (`IA32_S_CET.SH_STK_EN` and `WR_SHSTK_EN`). FRED is deferred after the alpha (D-065) and is recorded only.
 
 **What waits for it.** P-003 and P-004; the list of supported hardware.
 
