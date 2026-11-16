@@ -10,7 +10,7 @@ Each line points to the file that holds the detail.
 
 | Area | Open point | Detailed in |
 |---|---|---|
-| Kernel | Hard points of one kernel per core; nothing measured on its gain for P and E cores | [kernel.md](../architecture/kernel.md#hard-points) |
+| Kernel | Hard points of a node of several cores (D-128): a concurrent kernel, the gate under the walkers of other cores, bounds that grow with the number of cores; locking inside a node to measure on the reference desktop | [kernel.md](../architecture/kernel.md#hard-points) |
 | Kernel | Does the reference processor have FRED | [kernel.md](../architecture/kernel.md#hardware-features) |
 | Kernel | Formal proof of the kernel | [verification.md](../plan/verification.md#formal-proof) |
 | Kernel | Research axes, none designed yet | [prior-art.md](prior-art.md#kernel-research-axes) |
@@ -61,7 +61,7 @@ The contract files in `contracts/` mark their unsettled points with `// OPEN:`. 
 
 Two current statements conflict and the source does not settle the conflict: such a pair is kept in the topic files and listed here.
 
-No conflict is recorded at present. The seven conflicts recorded on 14 November 2026 were settled the same day; the resolutions are in the topic files and in the [decision log](../decisions/README.md) (D-080 to D-086).
+No conflict is recorded at present. The fourteen contradictions listed by the inventory of 16 November 2026 ([inventory-not-done.md](drafts/inventory-not-done.md), section 4) were stale statements, a draft superseded on one point and one state of the repositories (D-119 not yet carried by pull request 3 of the kernel repository). The statements were corrected the same day against the decisions that settle them; the state of the repositories is in [progress.md](../plan/progress.md#now). The seven conflicts recorded on 14 November 2026 were settled the same day; the resolutions are in the topic files and in the [decision log](../decisions/README.md) (D-080 to D-086).
 
 ## Project-level questions
 
@@ -80,7 +80,7 @@ From the block "Project" of the proposed answers of 14 November 2026 (decisions 
 
 Verified 14 November 2026: the name `dodos` is taken on GitHub by a user account, so another organisation name is needed; `dodos.org` (2010) and `dodos.io` (2021) are taken; `dod-os.org` is free. The trademark is not verified.
 
-Repository: `github.com/Vehicoule/dodOS` (public, created on 13 November 2026, empty). Organisation name: later.
+Repositories, all public: `github.com/Vehicoule/DodOS` (the system repository, created on 13 November 2026; it holds the WIT contracts, `verify`, the Nix environment and CI), `github.com/Vehicoule/dodos-kernel` (the kernel repository: `abi/`, and the reference model on pull request 3) and `github.com/Vehicoule/dodos-doc` (these documents). Organisation name: later.
 
 ### Licence and legal counsel
 
