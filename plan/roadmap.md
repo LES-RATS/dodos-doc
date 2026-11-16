@@ -35,7 +35,7 @@ On QEMU, then on the reference desktop:
 
 0. The [kernel interface](../architecture/kernel-interface.md) (objects and system calls), written before any kernel code. Then debugging before features: serial console, debugger stub, trace buffer, crash record; a small native shell and tools as soon as a first process runs. The kernel boots on the reference desktop from the first week, not only on QEMU (**Decided**, 14 November 2026).
 1. Platform bring-up (UEFI, ACPI, PCI, interrupts, timers, start of the other cores), capabilities, IPC, model and oracle on one core.
-2. Multi-core by messages, distributed revocation, recovery of a kernel, scheduling, memory, mlibc and the Rust standard library, first native service, virtio.
+2. Nodes of one core first, talking by the reduced set of D-128 (grants of frames, stamped sends, signals, roles, recovery), then nodes of several cores (D-128: a multithreaded process lives in one node); recovery of a node, scheduling, memory, mlibc and the Rust standard library, first native service, virtio.
 3. IOMMU, native NVMe driver, keyboard, network stack, Linux emulation for the network card, server image.
 4. NVIDIA core, NVK, GPU service, USB, audio.
 
@@ -53,7 +53,7 @@ Dependencies of Ladybird, compositor on real scanout, latency gates, then sleep,
 |---|---|---|---|
 | 1-2 | Step 0, security model, runtime, `dodo`; shell trial that validates gpui (see [ui.md](../architecture/ui.md#shell)) | Trials: Zig and Rust boundary, kernel with no per-thread stack, oracle harness, NVIDIA core outside Linux; boot under QEMU | Base ready |
 | 3-7 | Surface, actions, agent, confirmations, injection attacks | Contracts and one-core model; capabilities, IPC, basic memory | First public demonstration; IPC measured |
-| 8-17 | Shell, real store, signed packages, hosted network stack | Multi-core, distributed revocation, recovery of a kernel, scheduling, mlibc, Rust std, virtio | A `wasi:http` component served under QEMU; one kernel killed, the machine continues |
+| 8-17 | Shell, real store, signed packages, hosted network stack | Nodes between them (grants, sends, signals), nodes of several cores, recovery of a node, scheduling, mlibc, Rust std, virtio | A `wasi:http` component served under QEMU; one node killed, the machine continues |
 | 18-26 | Services ported to the target | Real desktop: ACPI, PCI, IOMMU, NVMe, keyboard, network card | Server image on the desktop |
 | 27-36 | Dependencies of Ladybird | NVIDIA core, NVK, GPU service, USB, audio | Vulkan triangle, real compositor |
 | 37-48 | Ladybird, latency gates | Hardening | Alpha (end of 2027) |
@@ -80,7 +80,7 @@ What does not compress with more agents: tuning on real hardware, calibration of
 - Periodic snapshot of all processes ([platform.md](../architecture/platform.md#process-state-suspend-resume-and-snapshots)).
 - Optimised Wasm tier and the 1.2 gate ([wasm-abi.md](../architecture/wasm-abi.md#optimised-tier)).
 - Device-to-device communication and the companion application ([devices.md](../architecture/devices.md)).
-- On-demand frequency and cores on demand; in version 1, only per-class preferences ([scheduling.md](../architecture/scheduling.md#core-load)).
+- On-demand frequency, and cores on demand (nodes that take and give cores at run time, an open point of the contract since D-128); in version 1, only per-class preferences, and nodes sized when they start ([scheduling.md](../architecture/scheduling.md#core-load)).
 - Image upscaling ([gpu.md](../architecture/gpu.md#upscaling-and-frame-generation-at-system-level)).
 - FRED ([kernel.md](../architecture/kernel.md#hardware-features)).
 - Wi-Fi (with the laptops) and Bluetooth ([network.md](../architecture/network.md#wi-fi)).
