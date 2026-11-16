@@ -26,6 +26,7 @@ Each line points to the file that holds the detail.
 | Security | Executable code for the web content process (JIT of LibJS) | [web.md](../architecture/web.md#jit-in-the-web-content-process) |
 | Security | Disk key, secure boot, accounts, signing keys: proposals to validate | [security.md](../architecture/security.md) |
 | Agent | Known weaknesses of the provenance model; labels per value | [security.md](../architecture/security.md#known-weaknesses) |
+| Security and agent | Threat model and agent security model, to validate: fourteen points for the two owners (class of external actions, wording of D-036, the model and remote providers, marks across nodes, speech, scope of a task) | [security.md](../architecture/security.md#points-for-the-two-owners) |
 | UI | Shell trial in weeks 1-2, validating gpui; gpui window back end | [ui.md](../architecture/ui.md#shell) |
 | UI | Accessibility tree format | [ui.md](../architecture/ui.md#accessibility) |
 | UI | Ladybird text composition on the project's input protocol | [ui.md](../architecture/ui.md#input) |
