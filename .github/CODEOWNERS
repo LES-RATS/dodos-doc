@@ -1,0 +1,18 @@
+# The contract lane of the documentation (plan/verification.md, "Development
+# workflow"): the decision log, the contracts and the kernel interface, the
+# security model, the gates and the verification rules, and the CI of this
+# repository. main takes direct pushes here, so this file names the owners
+# of these paths; it enforces nothing until a pull request is required.
+# @Vehicoule alone for now; the second owner is added when he joins.
+/.github/                       @Vehicoule
+/verify                         @Vehicoule
+/flake.nix                      @Vehicoule
+/flake.lock                     @Vehicoule
+/decisions/                     @Vehicoule
+/contracts/                     @Vehicoule
+/architecture/kernel-interface.md @Vehicoule
+/architecture/kernel.md         @Vehicoule
+/architecture/security.md       @Vehicoule
+/architecture/wasm-abi.md       @Vehicoule
+/plan/gates.md                  @Vehicoule
+/plan/verification.md           @Vehicoule
