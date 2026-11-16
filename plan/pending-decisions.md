@@ -34,6 +34,9 @@ A booklet for the two owners: every question the documents leave open, put so th
 | P-019 | Which proof tools for the kernel | Both | Verus and Kani; Flux not now | Leaning | Kernel CI, gate proof |
 | P-020 | Accept the one-core contract as the base | Both | A: accept now | Leaning | P-021, kernel code |
 | P-021 | Merge the reference model and the `abi/` licence | Both | A: merge both now | Leaning | Kernel baseline on `main` |
+| P-089 | May one process of a node use every send to a peer node | Both | B: two of eight sends kept for supervisors | Leaning | The model pass of D-131 |
+| P-090 | Must the gate contain a faulty kernel that holds a granted frame | Both | B: free a grant only on the holder's gate-written words | Leaning | The grant protocol in the model |
+| P-091 | What the audit of a recovery checks | Both | A: a walk of the tables after the acknowledgement | Leaning | G14 in the model |
 | **Hosted userland and agent** | | | | | |
 | P-022 | Accept the Step 0 contract revision as a draft | Both | A: merge as draft | Leaning | Hosted runtime, `dodo` |
 | P-023 | Where the actions of system services run | Both | A: in the service's own process | Leaning | Shell, settings contracts |
@@ -116,7 +119,7 @@ A booklet for the two owners: every question the documents leave open, put so th
 
 **Also left there.** The trial of the x86-64 bootstrap core (D-117), the reload policy, roles, the mailbox, the kept image, devices that follow their driver, stopping a core, the multi-core "Dynamic structure" of kernel.md, and two sentences made stale by D-128: memory.md line 27 ("each core has its own copy of the page table") and the multi-core gates of [gates.md](gates.md). The parts of D-122 to D-127 that concern only one node are in P-005, P-006 and P-020.
 
-**Who answers.** Both owners, when pass 14B is finished.
+**Who answers.** Both owners, when pass 14B is finished. **Except** the three questions the eighth review left for the owners (pass 14C, D-131), which change what the system promises and are put here as P-089 to P-091.
 
 ---
 
@@ -397,6 +400,58 @@ A booklet for the two owners: every question the documents leave open, put so th
 **Recommendation.** A: the contract lane asks humans to merge, and a merged base makes every later pass reviewable. *Leaning.*
 
 **Blocks.** The kernel's baseline on `main`. **Depends on** P-020. **Who answers.** Both owners (contract lane, D-084).
+
+
+## P-089 — May one process of a node use every send to a peer node
+
+**Question.** `SENDS_PER_PEER` (8) counts the stamped sends in flight from one node to another, whatever process makes them. Should any process be able to hold all eight, so that the supervisor's `node_send` to that peer returns `busy`?
+
+**Where.** [kernel-interface.md](../architecture/kernel-interface.md), "Questions after the eighth review (D-131)", question 1; "Calls between nodes", the state checks of `node_send`; the eighth review by Hydrogen, finding 12, and both its verifications (`reviews/2026-11-16-contract-review-8-*`), which leave it to the owners.
+
+**Options.**
+- **A. Accept it.** Gives: nothing to add. Costs: a process can keep a supervisor from reaching another node until its sends are answered; the placement service and the supervisor must notice and act.
+- **B. Keep two of the eight for a `node` capability with `manage`**, which only supervisors hold. Gives: a supervisor always has a send. Costs: one comparison in `node_send`; ordinary processes have six.
+- **C. A quota per task.** Gives: fairness between processes. Costs: a count per task and per peer, which the 256-byte task object cannot hold for 1,024 peers.
+
+**Proposed today.** B is written in the contract as the recommended rule.
+
+**Recommendation.** B: the cost is one comparison, and it keeps recovery and supervision reachable. *Leaning.*
+
+**Blocks.** The model pass of D-131 (the send credits). **Who answers.** Both owners.
+
+## P-090 — Must the gate contain a faulty kernel that holds a granted frame
+
+**Question.** A node frees a grant of one of its frames on the holder's word: its `Release`, its `RevokeStep` that reports the root removed, its `SendAnswer` that says a frame was not delivered, and the use index that answer gives. If the holder's kernel is faulty in those messages (its gate being correct), the granting node can free and reuse memory that the holder still translates. Should the gate's guarantee cover that case?
+
+**Where.** [kernel-interface.md](../architecture/kernel-interface.md), "Questions after the eighth review (D-131)", question 2, and "What it costs and what it does not cover" ("Not covered"); found by the assistant's own attack on pass 14C, raised by no reviewer.
+
+**Options.**
+- **A. No: say so.** A grant trusts the grantee's kernel for its release; G holds for the memory a node owns, not for frames it granted to a faulty node. Gives: no change. Costs: a kernel bug on a node that holds a frame can reach the granter's reused memory.
+- **B. Yes: the granter frees only on words the holder's gate wrote.** The use entry at the recorded index must name the grant with count 0; the holder's gate keeps such an entry, *released*, until the grant is freed, and writes a use entry for every frame of a `Send` it consumes. Gives: G holds against a faulty holder. Costs: one read per freeing, use entries that live until their grant is freed, and one case still to settle (a `Send` that finds the holder's use table full), so B needs a model before it enters.
+- **C. Yes: the granter searches the holder's use table (128 KB) before every freeing**, in steps. Gives: G holds with no protocol change. Costs: that search at every release.
+
+**Proposed today.** A is written in the contract, because B is not settled; B is the recommendation.
+
+**Recommendation.** B, after a model of its full-table case. *Leaning.*
+
+**Blocks.** The grant protocol in the next model pass. **Who answers.** Both owners.
+
+## P-091 — What the audit of a recovery checks
+
+**Question.** At each recovery, every node audits its own gate. The contract asked for each map count to equal the leaves of the node's tables that target its chunk, but the walk that counts them runs in steps while the node maps and unmaps, so a healthy node stopped the machine. What should the audit check?
+
+**Where.** [kernel-interface.md](../architecture/kernel-interface.md), "Questions after the eighth review (D-131)", question 3, and G14; Opus's verification of the eighth review (DeepSeek's report), new finding N3.
+
+**Options.**
+- **A. A walk of each table page under the gate lock**, checking that every entry targets memory the node may map, after the node's acknowledgement so it delays no reclaim. Gives: an exact check per step, no cost to the node's processes. Costs: a count left too low by a gate bug shows only once the memory it let go is reused.
+- **B. Keep the equality and freeze the node's map counts while its audit runs.** Gives: the stronger check. Costs: the node's processes cannot map or unmap during every recovery of any node, for as long as the walk of its tables.
+- **C. Keep the equality with a tally of 4 bytes per chunk of the machine in each node**, corrected by the gate behind the walk. Gives: the stronger check, no freeze. Costs: kept memory of 2 MB per node on a machine of 1 TB (256 MB for 128 node slots).
+
+**Proposed today.** A is written in the contract.
+
+**Recommendation.** A: the audit detects, it does not prevent, and A costs nothing to the processes the recovery keeps running. *Leaning.*
+
+**Blocks.** G14 in the next model pass. **Who answers.** Both owners.
 
 ---
 
