@@ -14,24 +14,24 @@ Written 16 November 2026 by Claude Opus 5.5, for the brief `pass14/ELASTIC.md`. 
 
 ## 0. The answer, briefly
 
-**I recommend shape C, made precise. I call it C\*.** A kernel covers a set of one or more cores; a core moves from one kernel to another only by being stopped and started again, so it carries nothing; the placement service creates, grows, shrinks and retires kernels; every kernel object of a process lives in one kernel; inside a kernel the cores share state under one lock first (with lock-free reads of capability slots); between kernels only **one-shot** operations cross, plus grants of memory and the failure machinery that exists today. No node is ever parked on another kernel's core.
+**I recommend shape C, made precise. I call it C\*.** **[2nd round: C\* is no longer proposed as the shape to build first: kernels of one core come first, and kernels of several cores are stage 2, part 9.4]** A kernel covers a set of one or more cores; a core moves from one kernel to another only by being stopped and started again, so it carries nothing; the placement service creates, grows, shrinks and retires kernels; every kernel object of a process lives in one kernel; inside a kernel the cores share state under one lock first (with lock-free reads of capability slots); between kernels only **one-shot** operations cross, plus grants of memory and the failure machinery that exists today. No node is ever parked on another kernel's core.
 
 Four choices make C\* more than the C of the brief:
 
 1. **The one-shot boundary.** Between kernels, an operation crosses only if the target kernel completes it in one bounded step and keeps nothing for the requester afterwards, apart from the ring slot of an unread message and the grant entries of what it lent. Remote waits, proxies, moves of capabilities and moves of threads do not cross. This one rule removes every family of confirmed faults that came from state held for another kernel (part 1.1).
 2. **A process lives in one kernel.** The process grows by its kernel taking cores, not by spreading over kernels. There is no core-group protocol between kernels at all.
 3. **Cores are owned through words, like memory.** Each physical core gets an ownership word in the living part of the machine table, written only through the gates, with the same discipline as the chunk words of D-115. A core is taken only when it is confirmed parked, by the same evidence a fence uses.
-4. **No co-hosting.** A kernel with little to do gives cores back and keeps one in deep idle, or seals with no core at all. The parking of D-108 goes; its purpose (cores that sleep) is met inside each kernel.
+4. **No co-hosting.** A kernel with little to do gives cores back and keeps one in deep idle, or seals with no core at all. The parking of D-108 goes; its purpose (cores that sleep) is met inside each kernel. **[2nd round: sealing with no core as an idle state is withdrawn; an idle kernel sleeps in place, R-7, part 9.2]**
 
 **Why the others lose.**
 
-- **A repaired** keeps rule 7 (`:17`), so it keeps the 18 message kinds of `model/src/remote.rs:37-138`, the proxies, `thread_move` and co-hosting, where the confirmed faults cluster. Its hardest case, one address space on many cores, is the protocol nobody has written (`:1877`); its planned form, a copy per node with frames under grants (`:320`), fills the 4,096-entry grant table at three nodes for a 4 GiB heap mapped in 4 KiB pages, that is 2,048 frames of at most 2 MiB (multicore-challenge-opus.md, P1, confirmed by verify-opus line 122). The trial measured a kernel shared by the process's cores ahead on exactly those operations: capability changes 2.3 to 9.6 times lower latency with a modelled 1 µs interrupt (M5:651), unmaps by every thread 1.55 to 2.0 times the throughput with range locks (M5:1060). The second verification advised repairing before cutting (verify-hydrogen lines 278-281); that advice was given while one kernel per core was fixed. Once a kernel may span cores, the hardest protocol A would repair, the core group across kernels, is not needed at all, and the repair buys less than the cut.
+- **A repaired** keeps rule 7 (`:17`), so it keeps the 18 message kinds of `model/src/remote.rs:37-138`, the proxies, `thread_move` and co-hosting, where the confirmed faults cluster. Its hardest case, one address space on many cores, is the protocol nobody has written (`:1877`); its planned form, a copy per node with frames under grants (`:320`), fills the 4,096-entry grant table at three nodes for a 4 GiB heap mapped in 4 KiB pages, that is 2,048 frames of at most 2 MiB (multicore-challenge-opus.md, P1, confirmed by verify-opus line 122). The trial measured a kernel shared by the process's cores ahead on exactly those operations: capability changes 2.3 to 9.6 times lower latency with a modelled 1 µs interrupt (M5:651), unmaps by every thread 1.55 to 2.0 times the throughput with range locks (M5:1060). **[2nd round: both figures come from finer locks than the one lock C\* starts with; with one lock, unmaps by every thread are 6 to 21 % slower than one node per core at `ipi` 0, M5:383-386]** The second verification advised repairing before cutting (verify-hydrogen lines 278-281); that advice was given while one kernel per core was fixed. Once a kernel may span cores, the hardest protocol A would repair, the core group across kernels, is not needed at all, and the repair buys less than the cut.
 - **B** (one kernel per core, the reduced set between them) cannot give one address space to the 16 threads of case 1 without a coherence protocol rebuilt in user space, which hits the same grant ceiling; it gives idle cores nothing better than idling in place. B is C\* with every kernel of size one. It is a sound first stage of C\*, not an end.
 - **C as briefed** leaves open what crosses, whether a core may host several kernels and how a core changes kernel. Left open, each choice brings back one of A's fault families.
 
 **What C\* costs against A on the common path** (trial figures, with an interrupt that is modelled, not measured): a longer tail on capability lookups in a busy kernel (p99 1.7 × W and p99.9 2.1 × W at W = 1 µs with 10 % changes, against 1.04 × W: M5:650); many-to-one signals 6 to 8 % slower at k = 4 with a notify updated by one atomic OR (M5:1056); IPC between cores of one kernel 4 to 7 % slower with one lock at k = 4 (M5:377-380), 1.0 to 2.4 % with a lock per endpoint (M5:652, M5:1113). Beyond the trial: a kernel to verify under concurrency (the seL4 clustered multikernel needed new thread states and a 1,000-line invariant proof for one such problem, part 1.3); a larger unit of failure; no gain on a machine of two cores.
 
-**What I showed.** The explorer covers three kernels, four cores, one frame, at most two accusations, and every interleaving of core moves, shootdowns, fences and reclaims: 1,819,997 states, every safety property holds and every state can reach a quiet state; with kernels that also retire and start again, 54,971,344 states and 369,929,808 transitions, with the same result. Four versions with one rule removed each break a property within 1 to 6 steps. The first run found a stuck state in my own protocol (a core given away that no other kernel takes); the protocol below includes the fix.
+**What I showed.** **[2nd round: this first explorer is superseded by part 9.3; it did not model stops in flight, park epochs, roles, zero-core kernels or credits]** The explorer covers three kernels, four cores, one frame, at most two accusations, and every interleaving of core moves, shootdowns, fences and reclaims: 1,819,997 states, every safety property holds and every state can reach a quiet state; with kernels that also retire and start again, 54,971,344 states and 369,929,808 transitions, with the same result. Four versions with one rule removed each break a property within 1 to 6 steps. The first run found a stuck state in my own protocol (a core given away that no other kernel takes); the protocol below includes the fix.
 
 **The experiment that would prove C\* wrong** (part 8): on the reference desktop, a kernel of 2 to 6 cores with one lock and lock-free slot reads, against the same number of one-core kernels, on the trial's workloads with real interrupts and with the call and mapping rates traced from Ladybird and an inference engine. If the lock costs more on lookups, IPC and signals than the shared kernel saves on changes and unmaps at those rates, C\* is wrong for this machine.
 
@@ -112,7 +112,7 @@ Each shape is defined by four answers: how many cores a kernel covers, whether t
 
 ## 3. The eight cases, shape by shape
 
-C\* is specified in part 4; the cases use its terms early. **Core word**: the ownership word of a physical core, states *free*, *owned* (*K*, *g*), *leaving* (*K*, *g*), *joining* (*K*, *g*) with *K* a kernel and *g* its generation. **Confirmed parked**: the same evidence a fence uses (x86-64: the park stub's epoch in the core beacon, `:1084`; ARM64: PSCI `AFFINITY_INFO` returns OFF, `:1086`; RISC-V: the hart is stopped, `:1087`). **One-shot call**: a call on a remote capability that the owning kernel executes in one bounded step without waiting (part 4.4).
+C\* is specified in part 4; the cases use its terms early. **Core word**: the ownership word of a physical core, states *free*, *owned* (*K*, *g*), *leaving* (*K*, *g*), *joining* (*K*, *g*) with *K* a kernel and *g* its generation. **Confirmed parked** **[2nd round: amended: the confirmation must answer a new park request, R-1, part 9.2; a stale `parked` passes otherwise]**: the same evidence a fence uses (x86-64: the park stub's epoch in the core beacon, `:1084`; ARM64: PSCI `AFFINITY_INFO` returns OFF, `:1086`; RISC-V: the hart is stopped, `:1087`). **One-shot call**: a call on a remote capability that the owning kernel executes in one bounded step without waiting (part 4.4).
 
 ### 3.1 A WebAssembly process with 16 threads
 
@@ -125,12 +125,12 @@ The process is either a WebAssembly process with shared-everything threads, whic
 
 **C\*.** *P* lives in kernel *K*. Every object of *P* (threads, contexts, capability space, address space and its tables, endpoints, notifies) is made from *K*'s memory.
 - *Growing by one core.* The placement service asks the owner *J* of a free-able core *c* to give it (one-shot `core_give`), then asks *K* to take it (one-shot `core_take`):
-  1. *J* moves the contexts admitted on *c* to its other cores, checking each core's admission (a local operation under *J*'s lock; refused with `budget` if they do not fit, as `core_place` is today, `:1194`); retargets the interrupt remapping entries that name *c* (at most 192, with an idempotent invalidation request to the unit role holder, as `core_place` does today); its gate writes *leaving* (*J*, *h*).
+  1. **[2nd round: `core_give` is not a one-shot call, R-16; a stop must never be sent to a core whose word is unmarked, R-2]** *J* moves the contexts admitted on *c* to its other cores, checking each core's admission (a local operation under *J*'s lock; refused with `budget` if they do not fit, as `core_place` is today, `:1194`); retargets the interrupt remapping entries that name *c* (at most 192, with an idempotent invalidation request to the unit role holder, as `core_place` does today); its gate writes *leaving* (*J*, *h*).
   2. *c* finishes the shootdowns addressed to it, invalidates its whole TLB, and parks (x86-64: the park stub; ARM64: `CPU_OFF`; RISC-V: `sbi_hart_stop`).
   3. *K*'s gate checks that *c* is confirmed parked, that *c*'s kind has *K*'s baseline features and vector length (D-118), and writes *joining* (*K*, *g*) by compare-and-swap; it starts *c* by the existing start path (x86-64: a start request in the park stub's page and an NMI; ARM64: `CPU_ON`; RISC-V: `sbi_hart_start`; `:1174`).
   4. *c* enters *K*'s entry, invalidates its whole TLB again, sets up its per-core state under *K*'s lock, and *K*'s gate (running on *c*) writes *owned* (*K*, *g*). *P*'s threads may now run on *c*, within their contexts' cores sets (D-040).
 - *Growing from 1 to 16* is fifteen such moves. *Shrinking* is the same with *K* as the giver; *P*'s threads keep running on *K*'s remaining cores.
-- *Map, unmap, protect.* *K*'s gate writes *P*'s single page table (G3 unchanged). An unmap invalidates locally, then sends a shootdown to the cores of *K* that may hold *P*'s tag, and waits for their acknowledgements in *K*'s memory: on x86-64 by interrupt, as the trial models it (README "Interrupts"); on ARM64 by one broadcast instruction, since `TLBI ASIDE1IS` "applies to all PEs in the same Inner Shareable shareability domain"; on RISC-V by an interrupt or by SBI `sbi_remote_sfence_vma_asid` with a hart mask. No message crosses kernels; no grant is used; the TLB guarantee of `:318` holds for *K*.
+- *Map, unmap, protect.* *K*'s gate writes *P*'s single page table (G3 unchanged). An unmap invalidates locally, then sends a shootdown to the cores of *K* that may hold *P*'s tag, and waits for their acknowledgements in *K*'s memory **[2nd round: a leaving core acknowledges before it parks, R-15]**: on x86-64 by interrupt, as the trial models it (README "Interrupts"); on ARM64 by one broadcast instruction, since `TLBI ASIDE1IS` "applies to all PEs in the same Inner Shareable shareability domain"; on RISC-V by an interrupt or by SBI `sbi_remote_sfence_vma_asid` with a hart mask. No message crosses kernels; no grant is used; the TLB guarantee of `:318` holds for *K*.
 - *Deaths at each step of a move.* *J* dies before *c* parks: *c* still runs *J*, its word names *J*, so *J*'s fence stops it; *K*'s take is refused until then (the core is not confirmed parked). *J* dies after *c* parked: *c* may be taken at once, or is freed by R6. *K* dies after step 3: *c*'s word names *K*, so *K*'s fence stops it, and clears a start request not yet acted on. *K* dies after step 4: *c* is one of *K*'s cores. The placement service dies: nothing was held for it; its successor reads the core words in slot 13. The explorer of part 6 checks these cases.
 - *Deaths of P's kernel or others.* *K* dies: *P* is lost, as with A's home. Another kernel dies: *P* is untouched, unless it mapped frames granted by that kernel (R2 removes those mappings).
 
@@ -164,7 +164,7 @@ The process is either a WebAssembly process with shared-everything threads, whic
 
 **C\*.**
 - A kernel with little runnable work gives cores away until it holds one; its timers and claimed interrupts move to that core (local); the cores given away park and stay free. A free parked core runs nothing and is held by nobody.
-- A kernel with no armed timer and no claimed interrupt may seal (`core_stop` mode seal, `:1183`): its block is saved, its last core leaves, and it holds no core at all; its memory and objects stay, frozen (`:1022`). It is resumed on any free core when its supervisor needs it.
+-  **[2nd round: withdrawn: R-7 to R-12, part 9.2]** A kernel with no armed timer and no claimed interrupt may seal (`core_stop` mode seal, `:1183`): its block is saved, its last core leaves, and it holds no core at all; its memory and objects stay, frozen (`:1022`). It is resumed on any free core when its supervisor needs it.
 - **Who holds what the sleeping cores held:** nothing, because a core holds nothing: its kernel's state is in the kernel's memory, which the kernel keeps.
 - **Waking:** an interrupt or a timer wakes a kernel's last core, which runs everything of that kernel; when load rises, the placement service gives the kernel more cores (3.1).
 - The minimum number of cores not parked is the number of kernels that hold an armed timer or a claimed interrupt. Policy keeps that small by putting background processes in few kernels.
@@ -194,7 +194,7 @@ The process is either a WebAssembly process with shared-everything threads, whic
   - *x86-64:* NMI, INIT, two SIPIs and the park stub, as today (`:1080-1084`), sent through the gate to each core of *K*; G10 changes from "a core whose node the caller drives the fence of" to "a core whose word names a kernel whose fence the caller drives". The bootstrap core and a core in VMX root operation are of class 1 (`:1081`, `:1088`).
   - *ARM64:* SDEI event 0 to each core, whose handler calls `CPU_OFF`; confirmed by `AFFINITY_INFO` per core (`:1086`). Class 1.
   - *RISC-V:* `fence_hart` per hart, where firmware offers it; otherwise class 0 (`:1087`).
-  - **A kernel's fence class is the lowest class among its cores** (design rule). Policy: the bootstrap core stays in a kernel of one core, as the contract already keeps unit roles off it (`:1874`); unit roles go to kernels whose cores are all of the best class (`:1211`).
+  - **A kernel's fence class is the lowest class among its cores** (design rule).  **[2nd round: now a gate rule, R-4, and the class is checked at the commit, R-5]** Policy: the bootstrap core stays in a kernel of one core, as the contract already keeps unit roles off it (`:1874`); unit roles go to kernels whose cores are all of the best class (`:1211`).
 - **A gain on weak machines.** Where a core is of class 0 and no monitor is declared, the contract runs one node, on one core (`:1088`). Under C\*, that one kernel may hold every core: an ordinary multiprocessor kernel without recovery, instead of a machine reduced to one core.
 - **How long:** detection is immediate for *self* and at least `STALE_NS` (100 ms, provisional, `:1231`) for a silent death; the fence is bounded by `FENCE_NS` (10 ms, `:1234`), now for all of *K*'s cores at once; R6 visits each chunk of the table once in steps of the recovery reserve (`:1110`, `:1130`), a time not measured.
 - **What the survivors never wait for:** the stop of *K*'s cores before blocking DMA (R1 needs no stop, `:1099`); an answer from *K* (R0 ends the waits for one-shot calls to *K* with `gone`; requests to a role *K* holds are kept and sent again to its successor; revocation steps of grants *K* holds are pinned, `:1104`, with the fix that a removal reaching a grant whose holder is already accused returns `again` without a message, verify-hydrogen line 121); *K*'s cooperation to release a core it was giving (a taker waits only for *K*'s fence); any other kernel, since the barrier waits only for the kernels whose `maps_of` bit names *K* (`:1126`).
@@ -255,8 +255,8 @@ The process is either a WebAssembly process with shared-everything threads, whic
 
 - The row *leaving* → *free* was added after the first run of the explorer, which found a core given away that no other kernel took staying *leaving* for ever (part 6).
 - **Member words** keep their states and transitions (`:1006-1043`) except the one that exists for co-hosting, "starting, live → sealed" by "the driver of the fence of another node placed on the same core" (`:1036`); the evidence *host* (`:1067`) goes with it. *Fencing* → *fenced* now requires every core whose word names (*K*, *g*), and every start request aimed at *K*, to be confirmed stopped.
-- **A sealed kernel holds no core.** It keeps its memory and its objects (`:1022`) and is resumed on free cores.
-- **A kernel's fence class** is the lowest class among the cores its words name; a kernel may take a core of a lower class only if the image allows it, and a unit role goes only to a kernel whose cores are all of the best class found (the successor rule of `:1211`, applied per kernel).
+- **A sealed kernel holds no core.** It keeps its memory and its objects (`:1022`) and is resumed on free cores. **[2nd round: only during a replacement, bounded by `SEAL_NS`, with admission at resume, R-8, R-9]**
+- **A kernel's fence class** is the lowest class among the cores its words name; a kernel may take a core of a lower class only if the image allows it **[2nd round: replaced by R-5: refused at the commit for a unit-role holder]**, and a unit role goes only to a kernel whose cores are all of the best class found (the successor rule of `:1211`, applied per kernel).
 
 ### 4.3 Inside a kernel
 
@@ -290,7 +290,7 @@ The process is either a WebAssembly process with shared-everything threads, whic
 |---|---|---|---|---|---|
 | M1 | `Signal` | OR bits into a notify of another kernel, through a grant of that notify with `send` | none: idempotent | merged into a fixed table of pending signals per peer at the sender; `busy` when that table is full | sender dies: bits already sent stay; receiver dies: the grant is invalid, the signal is `gone` |
 | M2 | `Send` | a stamped message into the receiving kernel's mailbox (`:1002`), carrying at most 4 grants of frames or notifies, made by the sender's gate before the message leaves; derivation only, never a move | sent, queued, received or refused | credit per peer: at most *Q* unread messages per (sender, receiver), *Q* a number of the image, counted from the receiver's consumed counter (W7); a task may use at most a quarter of them; otherwise `busy` at once | sender dies: queued messages naming its generation are dropped at receipt by the check; receiver dies: the grants die with nobody holding them and are freed when its generation is over (R3) |
-| M3 | `Call1`, `Answer1` | a one-shot call on a remote capability (list below) | asked, answered | `Call1` is credited like M2; an `Answer1` uses a slot reserved in the reverse ring, one per credit | target dies: R0 ends the wait with `gone`; caller dies: the answer fails the check and is dropped |
+| M3 | `Call1`, `Answer1` | a one-shot call on a remote capability (list below) | asked, answered | `Call1` is credited like M2 **[2nd round: one pool for every class is withdrawn: two classes, R-13, R-14]**; an `Answer1` uses a slot reserved in the reverse ring, one per credit | target dies: R0 ends the wait with `gone`; caller dies: the answer fails the check and is dropped |
 | M4 | `Revoke`, `RevokeStep` | revocation of a grant whose holder has mappings under it (`:842`) | live → revoking → freed; steps of at most 32 units, one answer each | `Revoke` credited; `RevokeStep` uses a reserved answer slot | holder dies: pinned until its generation is over (R3); a removal reaching a grant whose holder is already accused returns `again` without a message (the fix of verify-hydrogen line 121); granter dies: the holder removes in R2 |
 | M5 | `Release` | the holder removed the root remote capability of a grant (`:844`) | one-way | kept as *release pending* in the holder's use entry and sent when the ring has room (W6) | as today |
 | M6 | `UnitRequest`, `UnitAnswer` | attach, detach, invalidate, program a line, on a unit role's holder (`:865`) | epoch-checked, idempotent | `UnitRequest` credited; answer reserved | kept and sent again to the next holder (`:1098`) |
@@ -321,7 +321,7 @@ The process is either a WebAssembly process with shared-everything threads, whic
 - **A core moves** by `core_give` on its owner and `core_take` on its new kernel (3.1, steps 1 to 4). Moves are rare events: the cost of starting a core is not measured on DodOS, and Barrelfish/DC measured 0.5 to 1.2 ms in the booted core alone (§5.1). The placement service decides with hysteresis, at the pace "re-examined every few periods" of `kernel.md:72`.
 - **A kernel is created** by `core_start` mode fresh on a dead slot, naming a free parked core: the slot becomes starting (*g* + 1), the core *joining*, then the kernel builds its start-up state from its floor and the kept image (`:1174`).
 - **It grows and shrinks** by core moves; it keeps at least one core while it is live.
-- **It seals** with `core_stop` mode seal: unit roles handed over, one-shot calls finished or refused, every core *leaving*, the block saved, the member word sealed; it is resumed by `core_start` mode resume on free cores, with image 0 or 1.
+-  **[2nd round: amended by R-9 and R-12]** **It seals** with `core_stop` mode seal: unit roles handed over, one-shot calls finished or refused, every core *leaving*, the block saved, the member word sealed; it is resumed by `core_start` mode resume on free cores, with image 0 or 1.
 - **It retires** when it holds no process: its last core leaves, its memory is given back with `memory_give`, and the slot is dead (a clean death needs no fence: every core is confirmed parked).
 - **It dies**: 3.6.
 - **Never:** two kernels merge; a kernel splits; a process changes kernel (D4 in part 2). Each of these is decided now, so the contract needs no hook for them.
@@ -369,7 +369,7 @@ The process is either a WebAssembly process with shared-everything threads, whic
 
 ### 5.3 The model (`dodos-kernel`, branch `model`, at `2afc901`)
 
-- **`model/src/remote.rs`** (1,424 lines). Functions that go whole: `proxy_index`, `serve_request`, `proxy_at`, `answer_proxy`, `cancel_proxy`, `cancel_remote`, `defer_transfer`, `transfer_wait`, `transfer_reply`, `refused`, `returned`: 211 lines, counted from the function boundaries. Functions that shrink, not counted: the parts of `request`, `forward`, `receive_packet`, `misdirected`, `answered_request` and `place_transfer` that serve waits, moves and returns. Kept: `send_packet`, `receive_packet` (to become the one check), `valid`, `mailbox`, `stamp_of`, `capability_arguments` (the one-shot list), `make_grant`, `place_remote`, `remote_destroyed`, `released`, `anchor`, `grant_of`, `free_grant`, `revoke_anchor`, `revoke_step`, `revoked_step`, `build_kernel_space`. I do not repeat the earlier estimate of 900 lines, which its verification put at 500 to 600 (verify-opus line 129).
+- **`model/src/remote.rs`** (1,424 lines). Functions that go whole: `proxy_index`, `serve_request`, `proxy_at`, `answer_proxy`, `cancel_proxy`, `cancel_remote`, `defer_transfer`, `transfer_wait`, `transfer_reply`, `refused`, `returned`: 211 lines, counted from the function boundaries. **[2nd round: wrong: 174 lines from `fn` to `}`, 197 with doc comments; my count included blank lines]** Functions that shrink, not counted: the parts of `request`, `forward`, `receive_packet`, `misdirected`, `answered_request` and `place_transfer` that serve waits, moves and returns. Kept: `send_packet`, `receive_packet` (to become the one check), `valid`, `mailbox`, `stamp_of`, `capability_arguments` (the one-shot list), `make_grant`, `place_remote`, `remote_destroyed`, `released`, `anchor`, `grant_of`, `free_grant`, `revoke_anchor`, `revoke_step`, `revoked_step`, `build_kernel_space`. I do not repeat the earlier estimate of 900 lines, which its verification put at 500 to 600 (verify-opus line 129).
 - **`model/src/moves.rs`** (269 lines): removed.
 - **`model/src/system.rs`**: keeps `CoreState` per physical core and the messages in flight; gains core words and kernels with sets of cores. With one lock per kernel, "every event of a node runs alone" (`system.rs:5-7`) stays true per kernel; what is new to interleave is the lock-free slot read and the shootdown acknowledgements between a kernel's cores.
 - **`model/src/table.rs`**: gains the core words; loses `placed`, the one physical core of each node (`table.rs:186-191`).
@@ -381,6 +381,8 @@ The process is either a WebAssembly process with shared-everything threads, whic
 ---
 
 ## 6. How C\* would be modelled, and what I checked
+
+ **[2nd round: the explorer of 6.2 and appendix A is superseded by part 9.3]**
 
 ### 6.1 The models to build
 
@@ -474,7 +476,214 @@ Only the repository's figures are used. They come from a simulation on an Apple 
 
 ---
 
+## 9. Second round
+
+Written 16 November 2026, after `reviews/2026-11-16-verify-kernel-shape-opus-by-hydrogen.md` (cited as "vx:N") judged this draft and `reviews/2026-11-16-verify-kernel-shape-hydrogen-by-opus.md` (cited as "vy:N") judged the other proposal. I was asked not to defend C\*: where the verifier is right, I repair or withdraw; where it is wrong, I show it by a run. The first round's text above is kept; what it withdraws or amends is marked there with **[2nd round: …]**.
+
+**Baselines.** `p14:N` is `architecture/kernel-interface.md` line *N* at Docs `ede3b38` (pass 14). The first round's `:N` stays at `b15f37c`. The model is cited at `2afc901` as before.
+
+**What I ran.**
+- The verifier's seven tests (`/tmp/verify-opus-shape/verify_elastic.py`, `timeout 120`): all seven fail as the verifier reports (Tests 1, 2, 3a, 3b, 4, 5, 6).
+- A new explorer, `research/drafts/kernel-shape-explorer.py` (part 9.3), with a corrected protocol and one broken variant per repaired rule.
+- The line count of `remote.rs` at `2afc901`, read with `git show`.
+
+Both verifications end on the same order of construction: kernels of one core, with the reduced set between kernels, first; kernels of several cores second (vx:141-157, vy:197-199). I agree, and part 9.4 turns it into a list for the contract.
+
+### 9.1 Verdicts
+
+| # | Break claimed by the verifier | Reproduced | Verdict | Repair |
+|---|---|---|---|---|
+| 1a | A stale `parked` lets `core_take` pass before the core has stopped (vx:19, Test 1) | Test 1 fails in 8 steps; explorer `moves:stale_parked` breaks P2 in 9 steps | **Right.** I defined "confirmed parked" as "the same evidence a fence uses" (part 3), but `parked` is "the fence epoch written by the park stub" (p14:1060), and a voluntary give has no fence epoch | R-1, R-4 |
+| 1b | A stop (INIT, SDEI) sent while the word names the giver lands after another kernel took the core (vx:20, Test 4) | Test 4 fails in 6 steps; `moves:no_mark` breaks P7 in 7 steps | **Right.** | R-2, R-3 |
+| 1b′ | The verifier's repair: refuse a take while the giver is not live (vx:153) | `moves:giver_live_only` breaks P7 in 7 steps | **Not enough.** The taker reads the giver's member word, the giver is accused, its fence sends a stop, then the taker's compare-and-swap on the core word succeeds: two words, no atomicity | R-2 instead |
+| 2a | A unit-role holder takes a core of a weaker fence class (vx:21, Test 2) | Test 2 fails in 1 step; `moves:take_any_class` breaks P6 in 4 steps | **Right.** My rule was policy. My first repair, checking the role when the take reads the word, also failed: `moves:role_at_read` breaks P6 in 10 steps, because the role moves to the taker between its read and its compare-and-swap | R-5 |
+| 2b | G12 needs concurrent proofs of the gate (vx:121) | — (a proof cost, not a run) | **Right.** "On one core, sequential reasoning suffices"; G12 "adds a lock and flush epochs. VerusSync-style reasoning is unfinished even in Asterinas" (`gate-page-tables.md:601-602`). The first round did not weigh it | Staging (9.4) |
+| 2c | One lock breaks the bounds of D-042 (vx:23) | — | **Partly right.** D-042 asks for "a bounded, verified duration" (`decisions/README.md:52`). One lock adds a wait bounded by (*k* − 1) × the longest hold, so the bound holds but grows with *k* and with the slowest kind of core (`heterogeneous-cores.md:157`). The "either hold the lock across the shootdown or lose atomicity" dilemma is false: the wait for acknowledgements is a state of the waiting thread, and the unmap is two kernel events | R-6 |
+| 3 | Kernels sealed with zero cores: reclaim barrier, revocation, IOMMU entries, wake path, budget, retirement (vx:22, Tests 3a, 3b) | Tests 3a, 3b fail; explorer `seal:no_seal_timeout` (stuck in 3 steps), `seal:resume_any` (budget, 3), `seal:rebuild_live_only` (IOMMU, 4), `seal:retire_then_give` (3) | **Right on every point.** Zero-core sealing as an idle state is **withdrawn** | R-7 to R-12 |
+| 4 | One shared credit lets user messages starve kernel messages; counters and pending signals not reset at a peer's death (vx:24, Test 6) | Test 6 fails in 5 steps; `credits:shared_credit` stuck in 11 steps; `credits:no_gen_reset` stuck in 6; `credits:no_purge` delivers a stale signal in 5 | **Right.** | R-13, R-14 |
+| 5 | "211 lines" of `remote.rs` (vx:15) | Recounted at `2afc901`: 174 lines from `fn` to `}`, 197 with doc comments | **Right.** My script counted blank lines up to the next function. Corrected: **174 (197 with doc comments)** | — |
+| — | Test 5: an unmap waits for a core that parked without acknowledging (vx:25) | Test 5 fails on its own model; in mine, `shootdown:park_no_ack` (the test's assumption) is stuck in 10 steps, but `shootdown:acks_wait_only` holds | **A gap in my prose, not in the protocol.** Step 2 of a leave (part 3.1) has the core finish its shootdowns before it parks. Test 5 assumes it does not. The extra rule "a parked core counts as acknowledged" is redundant while step 2 holds | R-15 (prose) |
+| — | `core_give` is called one-shot, but step 1 waits for the unit holder's answer (vx:75) | — | **Right.** | R-16 |
+| — | On ARM64, a joining core is ON before it unmasks SDEI, so the whole kernel is unfenced (vx:71) | `--witness "lost on core" moves:correct` reaches a stop lost on a masked joining core in 9 steps, and `moves:correct` holds | **Wrong as a safety claim.** The fence repeats its stops until each core is confirmed, and the entry stub unmasks before it reads its word (R-3). The window costs time, not containment | R-3 |
+| — | ARM64 cores of a resident Trusted OS refuse `CPU_OFF` (vx:71) | — | **Right, and already settled by pass 14:** `MIGRATE_INFO_TYPE` finds that core at start and makes it class 0 (p14:1094) | R-4: such a core never moves |
+| — | The trial figures headlined in part 0 are fine-lock and range-lock results, while C\* starts with one lock (vx:14) | — | **Right for part 0.** Parts 1.2 and 7 carry the one-lock rows (C\* slower on unmaps by every thread at `ipi` 0, M5:383-386); part 0 is now marked | — |
+| — | "Overstates Wasm 0.3 multithreading" (vx:26, vx:113) | — | **Wrong.** Part 3.1 says WASI 0.3 does not have threads yet and names native code, citing `wasm-abi.md:128`, which says native Ladybird and inference "need real threads from the start" | — |
+
+### 9.2 The repaired rules, as sentences for the contract
+
+Each rule names the explorer variant that removes it and fails.
+
+- **R-1, park request** (`moves:stale_parked`). "Each park of a physical core, by a fence or by `core_give`, first writes a new value of that core's park request through the requester's gate. The core counts as parked only when the confirmation answers that request: on x86-64, `parked`, written by the park stub only, equals the current request; on ARM64, `AFFINITY_INFO` returns OFF after the request; on RISC-V, the hart's state is STOPPED after the request."
+- **R-2, fence mark** (`moves:no_mark`, `moves:giver_live_only`, `moves:r6_inflight`). "Before it sends any stop (NMI, INIT, SIPI, SDEI event 0, `fence_hart`) to a core, the driver marks that core's word by compare-and-swap. A marked word is never taken, settled or rewritten except by R6. R6 frees it only once the core is confirmed stopped and `SETTLE_NS` after the last stop sent to it." This replaces G10's "a core whose node the caller drives the fence of" (p14:902) by "a core whose word names that kernel and carries the mark".
+- **R-3, entry stub.** "A core started into a kernel runs the kept image's entry stub. The stub unmasks its stop signal (ARM64: `SDEI_PE_UNMASK`) before it reads its core word, and powers its core off if the word no longer reads *joining* by a live kernel. A stop lost while the core was masked is sent again: the fence repeats its steps until each core it covers is confirmed." No variant, since the run shows retries are enough; `--witness "lost on core"` shows the case is reached.
+- **R-4, cores that never move** (`moves:bsp_moves`). "The bootstrap core and a core of fence class 0 are never given or taken: the gate refuses *leaving* and *joining* on their words after machine start-up." On RISC-V, the project's `fence_hart` extension must leave a stopped hart in the HSM state STOPPED, so that `sbi_hart_start` can reuse it. That is a requirement on firmware the project writes (p14:1095), not checked anywhere.
+- **R-5, class at the commit** (`moves:take_any_class`, `moves:role_at_read`). "The gate call that writes *joining* re-reads the role table and refuses a core whose fence class is below the lowest class of the taker's cores, when a unit role names the taker as holder or target. A new holder, after it writes held and before it maps the unit, gives away any core of a weaker class." The second sentence closes a write skew between the role word and the core word that the explorer cannot see, since its steps are atomic.
+- **R-6, bounds with a lock.** "In a kernel of *k* cores, a call's verified bound is its one-core bound plus (*k* − 1) times the longest hold of the kernel lock on the slowest kind of core in that kernel. No kernel lock is held across a wait for another core (a shootdown acknowledgement, a thread leaving a core): that wait is a state of the waiting thread."
+- **R-7, idle kernels** (withdraws the first round's zero-core idle state). "An idle kernel keeps its last core and sleeps in place in the deepest state its idle table allows. Sealing is only the first half of a replacement." vy:150 found that sleeping in place serves C as well as one kernel per core.
+- **R-8, SEAL_NS** (`seal:no_seal_timeout`). "A kernel sealed for longer than `SEAL_NS` may be accused by any live kernel with evidence *seal*; the gate checks the seal's instant in the node beacon. So the barrier, the revocations and the requests that wait for a sealed kernel end at most `SEAL_NS` + `FENCE_NS` later." It uses evidence code 6, which pass 14 gives to *host* (p14:1019) and which co-hosting no longer needs.
+- **R-9, resume** (`seal:resume_any`). "`core_start` mode resume takes at least as many cores as the sealed kernel's admitted contexts need (`budget` otherwise). Before any thread runs, the kernel serves its pending revocations and runs R2 for every kernel whose generation ended while it was sealed."
+- **R-10, rebuild** (`seal:rebuild_live_only`). "A unit's rebuild keeps the context entries whose root table lies in memory the ownership table gives to a starting, live, sealing or sealed kernel, and clears the others." p14:1222 now says "clears those that no live node claims". The earlier fix, counting the reports of sealed nodes (verify-hydrogen line 120), cannot work when the sealed kernel has no core to answer.
+- **R-11, vectors of a sealed kernel** (not modelled). "A sealing kernel masks every vector it claimed, through its own remapping entries and gate, and unmasks them at resume."
+- **R-12, retirement** (`seal:retire_then_give`). "A retiring kernel gives back every block with `memory_give` while it still holds a core, then its last core leaves; its floor stays with its slot."
+- **R-13, two credit classes** (`credits:shared_credit`). "The ring of each ordered pair of kernels has two classes of credits. The kernel class covers revocation, unit requests, reports, hand-over, pings and every answer; it is sized at machine start and never used by a user thread. The user class covers stamped sends and one-shot calls made by user threads, with a cap per task. A kernel message never waits for a user message."
+- **R-14, generations of the counters** (`credits:no_gen_reset`, `credits:no_purge`). "The counts of messages sent and consumed name both kernels' generations. A sender resets its counts for a peer when it runs R0 for that peer, and R0 drops every pending signal that names the peer's ended generation."
+- **R-15, shootdown** (prose; `shootdown:park_no_ack` fails, `shootdown:acks_wait_only` holds). "A leaving core finishes the shootdowns addressed to it before it parks. An unmap may also count as acknowledged a core whose word no longer names the kernel, or whose word reads *leaving* with its current park request confirmed."
+- **R-16, `core_give`.** "`core_give` records the request and returns; it is not one of the one-shot calls. The owner completes the leave in steps: retarget the vectors, wait for the unit holder's answer as kernel work rather than as a thread's wait, write *leaving*, park. Its end is seen in the core word."
+
+### 9.3 The explorer, second version
+
+**File:** `research/drafts/kernel-shape-explorer.py`. Python 3, no dependency. Run `python3 -I kernel-shape-explorer.py` for every scenario and variant (about 80 s wall clock on the machine it was written on: 70 s of CPU), or name scenarios (`moves`, `shootdown`, `seal`, `credits`, `full`) or `scenario:variant`. `--witness TEXT scenario:variant` prints the shortest trace to a transition whose label contains the text. The program exits non-zero if a corrected protocol fails or a broken variant holds. Every run reported here was bounded by `timeout`.
+
+**What each scenario covers**, with what the verifier said the first explorer left out (vx:101-107):
+
+| Scenario | Configuration | Added since the first round |
+|---|---|---|
+| `moves` | Kernels A, B, C; four cores (A holds 0 and 1, B 2, C 3); core 1 of fence class 1 (signalled), the others class 2; core 3 is the bootstrap core; B holds a unit role; at most two accusations | The park request and its confirmation per class; a stop **in flight** across a move, lost on a masked joining core and sent again; fence marks; takes in two steps (read, then compare-and-swap); the unit-role holder and its take-over by class; the bootstrap core |
+| `shootdown` | The same, plus a frame F of A mapped in A's address space, at most one accusation | P4 and P5 with the park request, moves and one fence |
+| `full` | `moves` and `shootdown` together, two accusations | (run only when named) |
+| `seal` | Kernels A, B, C, four cores; B has contexts admitted on two cores; A grants a frame to B; B owns a device whose IOMMU entry sits on C's unit; A holds a block; the supervisor may disappear; core moves are atomic here | A kernel with **zero cores** and its wake, resume, the reclaim barrier, a revocation, the IOMMU rebuild, admission at resume, retirement, fresh starts |
+| `credits` | Kernel X to kernel Y; four user tasks whose messages Y never reads; X's kernel requests; Y dies twice and starts fresh; one pending signal | **Credits** of kernel and user messages, counters across generations, pending signals |
+
+**The `moves` scenario without the frame is a sound reduction**, not a sample. The frame's transitions (loads, unmap, acknowledgements, give, take) write only the frame's fields. No guard of a move, a fence, a take-over or R6 reads those fields. So removing them changes no reachable value of the other fields, and P1-P3, P6-P8 and the liveness of moves and fences are decided exactly. The reduction is what makes the default run finish: the combined model is 7.2 million states and six minutes.
+
+**Results** (16 November 2026):
+
+| Run | States | Transitions | Time | Result |
+|---|---|---|---|---|
+| `moves:correct` | 601,259 | 2,250,433 | 26 s | every property holds; no state is stuck |
+| `shootdown:correct` | 331,860 | 1,363,487 | 17 s | holds |
+| `full:correct` | 7,182,906 | 34,774,226 | 342 s | holds (the same result as `moves` and `shootdown` separately, with two accusations and the frame together) |
+| `seal:correct` | 66,352 | 335,807 | 0.9 s | holds |
+| `credits:correct` | 1,050 | 5,005 | < 0.1 s | holds |
+| 9 broken `moves` variants, 4 broken `shootdown` variants, 4 `seal`, 3 `credits` | — | — | each under 1 s, except `park_no_ack` (15 s) | each breaks its property in 1 to 13 steps (table 9.1) |
+| `shootdown:acks_wait_only` | 331,682 | 1,267,200 | 20 s | holds, as expected: the "counts as acknowledged" path is redundant while a leaving core acknowledges before it parks |
+
+**Properties.**
+- **P1:** a core that is executing is never started.
+- **P2:** a core executes kernel *K* only while its word names *K*.
+- **P3:** no core executes a dead kernel.
+- **P4:** once F is not A's, no core running A holds A's translation of F.
+- **P5:** a core running *K* holds no translation another kernel installed.
+- **P6:** a unit-role holder never takes a core of a weaker class.
+- **P7:** a stop never lands on a core that runs or starts another kernel.
+- **P8:** the bootstrap core never moves.
+- **Seal:** no live kernel holds fewer cores than its admitted contexts need; an attached device of a live or sealed kernel keeps its IOMMU entry; a retired kernel holds no block.
+- **Credits:** the ring never overflows; no signal of an ended generation is delivered.
+- **Liveness, everywhere:** from every reachable state a quiet state is reachable.
+
+**Found by this explorer while I built it** (both now in the rules):
+- the class check made when a take reads the word (`role_at_read`), refuted by a take-over that comes between the read and the compare-and-swap;
+- a modelling error of mine, a take committed by a kernel whose cores were already stopped. The fix ties every take to a core that runs the taker, as on hardware.
+
+**What it does not cover.**
+- Memory ordering: each word access is atomic and seen at once.
+- Generations in the core word of `moves`: no kernel restarts there; fresh starts are covered only in `seal`, where core moves are atomic.
+- The write skew between the role word and the core word (R-5, second sentence).
+- Real time: `SETTLE_NS` is modelled as "no stop in flight", and `SEAL_NS` as one step.
+- Interrupt retargeting and the unit holder's answer in `core_give` (R-16).
+- The vectors of a sealed kernel (R-11).
+- Grants beyond one frame; one-shot calls and their answers; more than three kernels or four cores.
+- An unfenced kernel.
+- The lock inside a kernel, the slot read, cross-core thread suspension (the clustered multikernel's thread-deletion problem, part 1.3).
+
+### 9.4 Staging: what stage 1 must already contain
+
+**Stage 1:** kernels of one core, the reduced one-shot set between kernels, no co-hosting, idle cores sleeping in place. **Stage 2:** a kernel takes and gives cores; a process lives in one kernel on several cores. The owner's rule is that what stage 2 needs in the contract, in `abi/` and in the layout of objects is settled before the one-core kernel is written. This is that list.
+
+**A. The words that own a core, and its states**
+
+1. **The core word**, one per physical core, in the living part (beside the list of p14:758). Bits 0-1: the state, 0 *free*, 1 *owned*, 2 *leaving*, 3 *joining*. Bit 2: the fence mark. Bits 3-15: the check (13 bits, the hash of p14:759's family). Bits 16-31: the kernel slot (0xFFFF for none). Bits 32-63: the kernel's generation. Stage 1 writes only *owned*, the mark, *free* (R6), and *free* → *joining* → *owned* (a fresh start on a free core). Stage 2 adds *leaving*, settling, and taking a live kernel's core: the same word and the same gate entry, with more transitions allowed.
+2. **The park request**, one word per core in the park stub's page, written by gates; **`parked`** in the core beacon (p14:1060), written by the stub only. Confirmation is equality (R-1). Stage 1 needs this for the fence already.
+3. **Kernel slots apart from physical cores.** The fixed part of the machine table names *n* kernel slots, each with its floor, member word, node beacon, grant and use tables and rings, and the core list apart. `StartCore` (p14:1728) keeps "the node whose own core it is" as the initial owner only; calls that act on a physical core name its core number.
+4. **The member word** (p14:1018-1022): the co-hosting transition (p14:1044) and evidence *host* go; evidence 6 becomes *seal* (R-8).
+5. **Node beacons:** consumed counters per peer and per credit class, tagged with generations (R-14).
+
+**B. Where a lock would sit in each object** (sizes of p14:1564-1572; stage 1 reserves the fields and never contends them)
+
+6. **Node block:** one kernel lock word and the gate lock of G12 (p14:904); an array of `CORES_PER_KERNEL_MAX` per-core parts holding what p14:608 lists as per core (queues, sum, running context, previous instant, hardware timer, idle table), plus the core's flush epoch, the TLB tags loaded on it, and its pending shootdowns.
+7. **`cspace`:** a sequence counter per segment of 128 slots, for the lock-free slot read. The directory's 8 bytes per 128 slots (p14:1570) become 16.
+8. **`notify`:** its bits in a word an atomic OR can update (the trial's `sync::Notify`, M5:857-861), inside its 64 bytes (p14:1565).
+9. **`endpoint`:** one lock word reserved inside its 64 bytes, for the per-endpoint lock if a measure asks for it.
+10. **`aspace`:** in its header page (p14:1569), the set of the kernel's cores that loaded its tag, for shootdown targeting, and eight range-lock words.
+11. **`thread`:** in its 1 KB fixed part (p14:1568), the core of its kernel that runs it, and a state *leaving its core* for suspension or destruction from another core (the clustered multikernel's problem, part 1.3).
+12. **`sched`:** the core of its kernel whose admission sum holds it, inside its 256 bytes (p14:1566).
+13. **`irq`:** the interrupt table becomes per physical core, not per node: 12 KB per core, kept at machine start (p14:1572). Each entry names its target core, and the table of a core belongs to the kernel its word names.
+
+**C. What the gate must already check in stage 1**
+
+14. G10 against core words: stops and starts go only to a core whose word names a kernel whose fence the caller drives and carries the mark, or to a core whose word reads *joining* by the caller (R-2).
+15. The core-word transitions, R6's "confirmed, and `SETTLE_NS` after the last stop" (R-2), the park request (R-1), the cores that never move (R-4), and the class at the commit (R-5).
+16. The two credit classes and the generation-tagged counters (R-13, R-14).
+
+**D. `abi/` values** (beside today's in `abi/src/machine.rs` at `model` head `c60ad75`: `FENCE_CLASS_*`, `CORE_START_*`, `CORE_STOP_*`, `Member`, `Evidence`, `RoleWord`)
+
+17. `CoreWord`, `CoreState`, `CORE_MARK`; the stub page's start and park requests.
+18. `KERNEL_SLOTS` (boot image); `CORES_PER_KERNEL_MAX` (1 in stage 1).
+19. `Evidence::Seal`, `SEAL_NS`.
+20. The credit numbers (`CREDITS_KERNEL`, `CREDITS_USER`, the cap per task), `PENDING_SIGNALS`, the ring capacity.
+21. `core_start`'s physical-core argument; `core_give` and `core_take` with their numbers and checks (stage 1 answers `busy` while `CORES_PER_KERNEL_MAX` is 1); the removal of `core_place` (p14:1202) and `PROXIES_PER_PEER`.
+22. The thread state value; the 16-byte `cspace` directory entry; the interrupt table per core.
+
+**E. Contract sections** (at `ede3b38`)
+
+- Rule 7 (p14:17) restated as the one-shot rule, and rule 3's list (p14:13): core words and park requests in, proxies out.
+- TLB (p14:318-322): "several cores" means inside one kernel.
+- One kernel per core (p14:606-621): per-core admission inside a kernel; parked nodes go.
+- `thread_move` goes (p14:59, p14:616); "where a thread may run" (p14:652) becomes "on the cores of its kernel".
+- Interrupts (p14:694): a vector of one core of the kernel.
+- The living part (p14:758) gains core words; grants by derivation only; calls on another node (p14:854) become the one-shot list.
+- G10 and G12 (p14:902, p14:904): G12 written as a rule that applies when `CORES_PER_KERNEL_MAX` > 1.
+- Cores: beacons (p14:1060), evidence (p14:1019), the fence over every core a kernel's words name (p14:1083-1101), successor by kernel class (p14:1219), rebuild (p14:1222), calls (p14:1162-1210), numbers (p14:1232-1251).
+- Open points: "a node on several cores" (p14:1921) is decided as this staging.
+
+**What a multithreaded native process can do in stage 1: one core.** All its threads live in one kernel, and stage 1's kernels have one core. They run concurrently, time-shared on that core, never in parallel. Parallelism comes only from splitting into processes that share frames and wake each other with signals:
+- The web engine already splits that way: "one process per web site" (`web.md:33`), with a Hub, a `RequestServer` and an `AudioServer` (`web.md:23-25`). Each process gets a core, and the threads inside one process (the JavaScript engine, layout, the compositor's core) share it.
+- Local inference is planned on llama.cpp "with a Vulkan back end" (`agent.md:11`), so its heavy work may run on the GPU. Whatever it runs on the CPU runs on **one core**.
+
+**The smallest stage-2 subset that lifts it: kernels created with several cores that never change size.** A fresh start takes *k* free cores at once (*free* → *joining* → *owned* on each), and nothing moves after that: no give, no settle, no take of a live kernel's core.
+
+It needs:
+- the kernel lock and per-core parts (laid out in stage 1);
+- G12's gate lock and flush epochs, with their concurrent proof;
+- the shootdown inside a kernel;
+- the thread state for cross-core suspension;
+- per-core admission;
+- the fence of every core a kernel's words name (rules already in stage 1).
+
+It does not need: *leaving*, settling, takes of a live kernel's core, R-16, or the class check at a commit beyond the one made at creation.
+
+The placement service sizes the kernel when the process starts, from its manifest. This is the clustered multikernel of part 1.3, with kernels created at run time. Elastic growth and shrinking are the next increment, on the same words.
+
+### 9.5 What the first round withdraws or amends
+
+Each item is marked in the text above.
+- The definition of "confirmed parked" (part 3): amended by R-1.
+- Zero-core sealing as an idle state (parts 0, 3.4, 4.2, 4.5): **withdrawn** (R-7).
+- The class rule as policy (parts 3.6, 4.2): amended by R-4 and R-5.
+- `core_give` among the one-shot calls (parts 3.1, 4.4): amended by R-16.
+- One credit pool (part 4.4): **withdrawn** (R-13, R-14).
+- The resume and retirement wording (part 4.5): amended by R-9 and R-12.
+- "211 lines" (part 5.3): **wrong**, corrected to 174 (197 with doc comments).
+- The first explorer (part 6, appendix A): superseded by 9.3. Its runs stand for what they covered, but they did not cover in-flight stops, park epochs, roles, zero-core kernels or credits.
+- Part 0's headline on unmaps and changes: amended, since it quoted finer-lock rows.
+- C\* as the shape to build first: **withdrawn.** Kernels of several cores are stage 2 (9.4).
+
+### 9.6 What stays unproven
+
+- **No kernel exists.** Every statement about cost is still the trial's simulation, with interrupts modelled (part 7). The measures of part 7 on the i5-14600KF are still to make.
+- **The gate of a kernel of several cores** (G12) has no proof, and the tool that would give one is unfinished (`gate-page-tables.md:602`).
+- **The bound of R-6** depends on the longest hold of a kernel lock, which no code yet has.
+- **Memory ordering of the core word**, the mark and the park request on x86-TSO and Armv8: not modelled. That is the third model of 6.1.
+- **The write skew of R-5** between the role word and the core word, which the explorer cannot see.
+- **The firmware behaviour R-1 and R-4 rely on:** that `AFFINITY_INFO` reports OFF only after the request's `CPU_OFF`, and that `fence_hart` leaves a hart STOPPED. Neither is checked at source in this draft.
+- **What the move protocol costs on hardware** (park, NMI, start), and whether a kernel spanning P and E cores is acceptable (`heterogeneous-cores.md:157`).
+- **Grants, one-shot calls and their answers** under the explorer's rings: only the credit counts are modelled.
+
+---
+
 ## Appendix A. The explorer
+
+**[2nd round: superseded by `research/drafts/kernel-shape-explorer.py`, part 9.3. This appendix keeps the first explorer as it was run.]**
 
 File: `/tmp/opus-elastic/model/elastic.py`, a standalone Python 3 program with no dependency, written for this draft and kept in that directory. Run, each bounded by `timeout`:
 
