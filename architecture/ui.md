@@ -67,7 +67,7 @@ In the contract ([contracts/store.wit](../contracts/README.md)), the `exchange` 
 - **Inspirations assembled.** The roles of Material 3 Expressive (colour roles derived from a source colour, type scale, shape scale, spring-based motion), without its mobile components; the proportions and restraint of Adwaita (desktop density, content first); the frosted glass of COSMIC (Dual Kawase blur, shipped in COSMIC 1.3.0).
 - **Material carries trust.** Frosted glass is reserved for the system and the agent. Only the compositor sees the pixels of other surfaces, so an application cannot imitate it. Applications have opaque tonal surfaces. An opacity setting exists for accessibility.
 - **Glass for applications**: reserved for the system at first (**Decided**). If it opens one day, it will be a material supplied by the compositor and visibly distinct from the system's.
-- **Visual identity** of who is speaking (agent, application, system), of the effect class (see [agent.md](agent.md#effect-class)) and of provenance.
+- **Visual identity** of who is speaking (agent, application, system), of the effect class (see [security.md](security.md#effect-class)) and of provenance.
 - **Motion** is driven by the compositor, can be interrupted, and is subject to the latency gates.
 - **Cost of the framework.** An application that bundles gpui pays for it every time (static linking, 8 to 15 MB quoted by a guide, to measure; plus its own glyph atlas and GPU context). A catalogue application pays nothing: rendering is in the shell, which is the project's equivalent of a shared library. Consequence: the project's native userland is written against the catalogue, which will have to grow beyond the agent's fifteen types.
 

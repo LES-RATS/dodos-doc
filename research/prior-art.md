@@ -80,7 +80,7 @@ The ground is already occupied: an AgenticOS workshop exists (March 2026, then S
 | Explanation of authority | Not to present as new: a query on the derivation tree |
 | Kernel per core type | Not to present as new: Barrelfish/DC and Popcorn |
 
-The items not to present as new remain useful to the product. The weaknesses the study listed for the agent model are in [agent.md](../architecture/agent.md#known-weaknesses).
+The items not to present as new remain useful to the product. The weaknesses the study listed for the agent model are in [security.md](../architecture/security.md#known-weaknesses).
 
 Softened claims (**Decided**, 14 November 2026): the statements "no kernel found" (display-anchored scheduling) and "does not seem to be published" (capabilities typed by WIT) are softened.
 
@@ -113,6 +113,6 @@ From the same study:
 
 - Recovery of a kernel (Hive, Barrelfish/DC, Quest-V, Kmorph, Otherworld): [kernel.md](../architecture/kernel.md#recovery-of-one-cores-kernel).
 - Linux drivers in user space (SUD, LKL, Genode, LinuxKPI, LionsOS): [drivers.md](../architecture/drivers.md).
-- Agent security (lethal trifecta, rule of two, FIDES, RTBAS, IsolateGPT): [agent.md](../architecture/agent.md#security-model).
+- Agent security (lethal trifecta, rule of two, FIDES, RTBAS, IsolateGPT): [security.md](../architecture/security.md#security-model-of-the-agent).
 - Distributed capabilities (CapTP, Cap'n Proto) and Plan 9: [devices.md](../architecture/devices.md#principle).
 - Ancestors of individual ideas: [ideas.md](ideas.md).

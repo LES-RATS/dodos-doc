@@ -38,8 +38,8 @@ Where the work stands: [plan/progress.md](plan/progress.md).
 | [architecture/gpu.md](architecture/gpu.md) | WebGPU for applications, NVIDIA port, GPU service, GPU memory |
 | [architecture/network.md](architecture/network.md) | Network service, listening capabilities, key-addressed services, Wi-Fi, Bluetooth |
 | [architecture/devices.md](architecture/devices.md) | Device-to-device communication |
-| [architecture/security.md](architecture/security.md) | Isolation, chain of trust, secure boot, keys, signing, accounts, threat model outline |
-| [architecture/agent.md](architecture/agent.md) | The agent, effect classes, provenance marks, confirmation matrix |
+| [architecture/security.md](architecture/security.md) | Isolation, chain of trust, secure boot, keys, signing, accounts, the threat model, the security model of the agent, attack walk-through |
+| [architecture/agent.md](architecture/agent.md) | The agent, how it acts, its contract, memory and voice |
 | [architecture/ui.md](architecture/ui.md) | Compositor, shell, design system, catalogue, agent surface, input, accessibility, audio |
 | [architecture/web.md](architecture/web.md) | Web engine (Ladybird fork), its port, web content and capabilities |
 | [architecture/media.md](architecture/media.md) | Codecs, protected video, hardware video decoding, fonts |

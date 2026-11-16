@@ -147,6 +147,147 @@ Not trusted, and bounded instead: applications, web content processes, drivers a
 | Denial of service by an application against the machine | Bounded by budgets ([scheduling.md](scheduling.md)), a goal of the latency contracts and not of this model | Proposed; alternative: count availability as an asset |
 | A malicious project signing threshold, or a publisher against its own packages | They are on the trusted list; the user's own keys are the way out | Proposed |
 
+## Security model of the agent
+
+**Decided, 14 November 2026** for the points marked D-035 and D-036: the fresh instance per action, the effect class in two fields, actions in the signed manifest, the two marks and the confirmation matrix, third-party output untrusted by default, secret fields, the confirmation drawn by the system, the gate of injection attacks, and the rule against combining the three risks. The decision asked for this page before `core.wit` is frozen. Every other line is **Proposed, 16 November 2026**, unless it says otherwise.
+
+The principle: the model is not trusted to decide. It is treated as if hostile content steered it, because any content it reads can. What it can do is bounded by the system, by three means: the task (what it may touch), the effect class (what an action can change) and the marks (what the task has read). How the agent works is in [agent.md](agent.md).
+
+Sources, verified 16 November 2026 (the sections cited were read): Willison, [The lethal trifecta for AI agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) (16 June 2025); Meta, [Agents Rule of Two](https://ai.meta.com/blog/practical-ai-agent-security/) (31 October 2025); Costa et al., [FIDES](https://arxiv.org/abs/2505.23643) (arXiv 2505.23643); Zhong et al., [RTBAS](https://arxiv.org/abs/2502.08966) (arXiv 2502.08966); Wu et al., [IsolateGPT](https://arxiv.org/abs/2403.04960) (arXiv 2403.04960); Debenedetti et al., [CaMeL](https://arxiv.org/abs/2503.18813) (arXiv 2503.18813).
+
+### Delegation by task
+
+- The agent has no authority of its own. Each user request is one call of `handle` with one **task**; the task carries the delegated rights, the marks and the journal, is logged, and is revocable as a whole. Nothing survives it: the `agent` world does not import `keep` (D-035; [contract](agent.md#the-agent-in-the-contract)).
+- In the kernel, a `task` object carries the marks and stops every thread of the task in one write; the capabilities are then removed in bounded steps (D-111; [Tasks and marks](kernel-interface.md#tasks-and-marks)).
+- A sub-task has a subset of the parent's scope. Its marks are set in the parent at once ([contracts/actions.wit](../contracts/README.md)), so it cannot quarantine what it reads.
+- **Scope of a new task** (**Open**). The documents do not say who chooses it. Recommended: every action of the system services and of the installed applications, minus those the user excluded. The scope then protects by revocation and by the journal; the class and the marks protect by the matrix. Alternative: a scope chosen per request by a router, which is one more component to trust.
+- **Budgets are split, never copied** (Proposed). A task holds a time budget (the scheduling contexts of its threads), a memory budget drawn on by all its processes (D-073), and a count of external actions. A sub-task receives a part, taken from the parent. A capability that carries a budget can be lent or split, never duplicated, and a budget never crosses to another device: each device holds its own part. This answers the weakness "a copied budget becomes a shared counter" ([Known weaknesses](#known-weaknesses)).
+
+### Effect class
+
+The **effect class** of an action says what the action can change (D-035). It has two fields:
+
+| Field | Name in the contract | Values |
+|---|---|---|
+| Modification | `change` | `none`, `reversible`, `irreversible` |
+| Scope | `reach` | `local`, `external` |
+
+- The actions and their classes are in the signed package manifest: for each action, its name, description, input schema, output schema and effect class. There is no `list-actions` function: a function could change its answer after installation, and the component would have to run to be asked. The system reads the manifest and serves it to the agent as `action-info`.
+- Each action runs in a fresh instance, on which the system calls only `actions.invoke`. The instance shares no memory with the running application and is destroyed afterwards. It holds only what the request carries (input, bound objects, the `home` collection), attenuated to the class.
+- The imports of an action instance are linked to match its class: storage is read-only when `change` is `none`, and every network import answers `denied` when `reach` is `local`. Every write to the store is versioned, which is why a store capability is safe to hand to an action whose change is `reversible`. For an action of reach `local`, the declared class is therefore binding, and lying about it gains nothing.
+- **For reach `external`, the class is not binding** (finding of this page). A network capability cannot tell a request that reads from one that changes remote state or carries data out. An action declared `none` and `external`, which the matrix runs without confirmation in most tasks, can therefore send a mail or a payment. Proposed rule: an action instance of change `none` gets only `wasi:http`, no sockets, only the methods `GET` and `HEAD` with no body, and only to the hosts its manifest lists for that action. What remains: a server that changes state on `GET`, and data carried in the address. See [point 1](#points-for-the-two-owners).
+- **A description is third-party text** (Proposed). The name, description and schemas of an action of a third-party manifest are written by its publisher and read by the model. Reading them through `available` adds the `untrusted` mark, as reading an output does. Since the matrix confirms irreversible and external modifications whatever the marks, the cost is small (see [point 5](#points-for-the-two-owners)). Alternative: trust signed descriptions, which leaves an injection channel in every manifest.
+- **A class that grows at update is a new right** (Proposed). A new version that raises the class of an action (`none` to `reversible` or `irreversible`, `local` to `external`) needs the user's agreement, as any new right does (D-056).
+
+### Provenance marks
+
+Provenance follows the data (D-035). A task carries two marks: "has read private data" and "has read untrusted content".
+
+- In the contract the marks are the flags `private` and `untrusted`, and a provenance is an origin (`system`, `user`, `app:<component>`, `web:<origin>`) plus marks. Provenance is set by the system only, never by the producer. Marks are only ever added; reading data adds its marks to the reading task.
+- The output of an action is untrusted by default for any third-party application. Only the system and the user's own data are trusted; a publisher does not declare itself trusted.
+- A secret field never emits its value to the agent; the value goes to the action directly, read by the system when the button is activated.
+- Passing an object from one action to the next without reading it adds no mark: only reading the object's content does ([contracts/actions.wit](../contracts/README.md)). This is the one form of FIDES's hidden variables (section 5.1) that version 1 has. Proposed: an action that returns large or third-party content returns it as an object, not inside its JSON output.
+
+Proposed rules for the origins the documents leave open:
+
+- **The user's request keeps the provenance of its parts.** Text pasted or dropped into the agent's bar keeps the provenance of the object it came from (the clipboard keeps it). A request with an untrusted part starts its task with the `untrusted` mark. Without this, pasting a page into the bar launders it into origin `user`, which CaMeL's threat model assumes away (section 3).
+- **A capture carries the marks of what it shows.** A screenshot or a screen recording takes the union of the marks of the surfaces it captures, which the compositor knows. Without this, capturing a hostile page makes it trusted.
+- **What the camera and the microphone record, outside the user's request, is untrusted.** A photo can show a printed instruction. Media from the foreign zone is untrusted too.
+- **What the agent writes into its memory carries the task's marks**, as every store write does; a later task that reads it takes them back.
+
+### Confirmation matrix
+
+| Action | Task without the "untrusted" mark | Task marked "untrusted" |
+|---|---|---|
+| Local read | Automatic | Automatic |
+| Local reversible modification | Automatic, can be undone | Automatic, can be undone |
+| Local irreversible modification | Confirmation | Confirmation, provenance displayed |
+| External read | Automatic | Automatic without the "private" mark, confirmation otherwise |
+| External modification | Confirmation | Confirmation, provenance and exact content displayed |
+
+- The confirmation screen is drawn by the system from the typed schema of the action and the exact input, never from the text of the model. The agent cannot draw, skip or answer it; a refusal by the user is the error `refused`. It is drawn above the surface concerned (D-035; [ui.md](ui.md#agent-surface)).
+- A suite of injection attacks is a gate of the hosted track (D-035; [roadmap](../plan/roadmap.md#calendar)). The [attack walk-through](#attack-walk-through) below is its first list.
+- Labels per value rather than per task (FIDES, RTBAS, IsolateGPT): to read, after version 1 (D-035).
+
+Proposed rules for the confirmation itself:
+
+- **Answered only by a gesture on it**: a click or a touch on the confirmation, or a key while it holds the focus, which the compositor owns. Never by voice and never by synthetic input: input injection is a capability nobody holds by default ([ui.md](ui.md#input)). Alternative, as an accessibility setting: a spoken answer, at the cost that anyone audible can confirm.
+- **Not answerable by accident**: its buttons ignore input for a short time after it appears (starting value 500 ms, to calibrate), and it never appears under the pointer.
+- **A secure attention key**: a key combination reserved to the system and granted to no one, as global shortcuts are capabilities ([ui.md](ui.md#input)). It shows what is pending: confirmations, the running task, its journal. A user who doubts a confirmation, seen or heard, checks it there. It is the only check that also works for a screen-reader user, since any application with the playback right can imitate a sound.
+- **A grant for the rest of the task**, only in a task without the `untrusted` mark: the user may confirm "this action with these exact arguments until the task ends". Never beyond the task, never in a marked task. This is the session permission of IsolateGPT (appendix A-D), narrowed.
+- **A hold before an external modification**: once confirmed, the system waits before calling the action (starting value 10 seconds, a setting, 0 allowed); during the hold the journal entry is cancellable.
+
+### No task combines the three risks
+
+**Decided, 14 November 2026** (D-036): no agent task combines private data, untrusted content and external communication. The rule takes up Willison's "lethal trifecta" (access to private data, exposure to untrusted content, the ability to communicate externally) and Meta's "Agents Rule of Two" (an agent satisfies at most two of: [A] processes untrustworthy inputs, [B] has access to sensitive systems or private data, [C] can change state or communicate externally).
+
+How it holds: the marks are Meta's [A] and [B]; the class is [C]. The matrix puts a confirmation drawn by the system on every cell where the three meet: an external read in a task marked both `private` and `untrusted`, every external modification, every irreversible local modification. Meta's text admits all three in one session when the agent is not autonomous and "at a minimum requires supervision — via human-in-the-loop approval". The matrix is that supervision, so the rule reads: no task combines the three without a confirmation of each external or irreversible effect. One difference with Meta: a reversible local modification runs without confirmation in a task with both marks, because the journal can undo it; Meta counts every change of state under [C]. The wording is a [point for the two owners](#points-for-the-two-owners) (point 2).
+
+### What the system draws and the model cannot
+
+The model emits only nodes of the fifteen agent-level kinds on its overlay, validated at each update ([ui.md](ui.md#agent-interface-format)). The system alone draws, in system material and out of reach of applications and of the model:
+
+- confirmations, and the secure attention view;
+- the indicators of microphone, camera and capture ([Baseline](#baseline));
+- the agent's entity (below);
+- the frame of each card: who speaks (agent, application, system) and, for a card drawn by a marked task, the mark ([ui.md](ui.md#design-system));
+- the request as the system received it, typed or transcribed, in the agent's bar;
+- the journal of the task, the rights screen, the object picker and the clipboard;
+- the focus and the cursor.
+
+Proposed, so that the model cannot imitate the system inside its own cards: the icon names `system` and `untrusted` of the agent catalogue are refused on the overlay, and an applet or an image is drawn inside an opaque frame of application material, never on glass.
+
+### The agent's entity
+
+**Proposed.** The agent appears on screen as an entity: a small figure at a fixed place of the agent's bar. The compositor draws it, from a closed list of states, each derived from a fact the system knows:
+
+| State | Fact |
+|---|---|
+| Idle | Only the wake-word detector receives the microphone |
+| Listening | The microphone is routed to the agent |
+| Thinking | A task runs and an inference call is in flight; a distinct form when the model is remote |
+| Speaking | Speech synthesis plays the agent's voice |
+| Acting | An action of the task is running; a distinct form for reach `external` |
+| Waiting | A confirmation is pending |
+| Stopped | The task was refused, cancelled or revoked |
+
+The model never draws it, and never chooses its state, for five reasons:
+
+1. It is an indicator, like the microphone indicator: it is worth something only if it is true. A model that drew it could show "idle" while the microphone is open or an action runs, and a model can be steered by any content it read.
+2. The facts it shows are known to the system, not to the model, which could only guess them.
+3. A closed list can be learnt by the user and tested, by reference images per state as for the catalogue. A free drawing can be neither.
+4. A figure the model animates is a channel to imitate system material and to press the user (urgency, emotion).
+5. The latency gate asks for a visual acknowledgement within 100 ms ([gates](../plan/gates.md#latency-gates)), before any output of the model exists.
+
+Alternatives: expression parameters chosen by the model within system bounds, rejected for reasons 1 and 4; no entity, only the bar, which is cheaper and loses the glanceable state.
+
+### Speech
+
+- **The always-on wake word.** The detector is a component with the microphone as only input and a signal as only output, with no network and no storage ([agent.md](agent.md#voice)). What leaks is one bit per detection. The microphone is therefore always open to it, which the rule "the microphone indicator is drawn by the compositor" does not yet say how to show. Proposed: a discreet permanent mark while only the detector listens (the entity's idle state), the full indicator once the agent listens, and a setting that turns the wake word off ([point 6](#points-for-the-two-owners)).
+- **The request heard after the wake word** has origin `user`, but anyone audible is the user, a loudspeaker included. Proposed: the transcript is shown in the bar as the system heard it; a confirmation is never given by voice; a locked session runs no task on user data, so the wake word only opens the lock screen ([point 7](#points-for-the-two-owners)).
+- **The machine's own sound.** Echo cancellation subtracts what the machine plays, so its own voice or a video does not wake it. It is a filter, not a guarantee. Proposed: the recogniser also drops a request whose text matches what the machine spoke in the last seconds.
+- **Dictation** goes through the text input protocol, by an input engine with no network ([ui.md](ui.md#input)). Text dictated into an application's field goes to that application only, with origin `user`; dictated into the agent's bar, it is the request.
+- **Speech synthesis reading a window.** The screen reader is deterministic and written by the project; the agent does not replace it ([ui.md](ui.md#accessibility)). The text it reads is third-party and gains no authority by being spoken, unless the recogniser hears it (the filter above) or the user takes it for the system. A window can imitate a spoken confirmation, as it can play any sound; the secure attention key is the check.
+
+### Known weaknesses
+
+From the delegated prior-art study of 14 November 2026 (not cross-checked). Each one, with the rule this page sets, checked against the published work, or stated as open with its cost.
+
+**1. Everything quickly becomes "untrusted" and the user confirms everything.** RTBAS names it "label creep" and notes that confirming every tool call leads to fatigue, to "mindlessly approving problematic requests or abandoning the system entirely" (section 1); CaMeL calls it user fatigue and does not solve it (section 9.2); FIDES names "confirmation fatigue and social engineering" (section 1).
+
+- What the matrix already limits: the `untrusted` mark changes only one decision, an external read in a task that also holds the `private` mark. Irreversible and external modifications are confirmed whatever the marks. So the spread of marks costs few confirmations; the number of confirmations is driven by the classes of the actions the user asks for.
+- Rules: marks die with the task, and each request is a new task (Meta's "starting a new session (i.e., with a fresh context window)"); objects pass between actions without being read (FIDES's hidden variables, section 5.1); a grant for the rest of an unmarked task (IsolateGPT's session permission, appendix A-D); the injection suite counts the confirmations per task and the spread of marks across services ([Open points](kernel-interface.md#open-points)), so the cost is measured.
+- Not taken: RTBAS removes taint from regions that an LM judge or an attention score says did not influence the next call (section 7). That puts a model in charge of a security decision, against the principle of this page.
+- Stays open: every external modification is confirmed, so an agent that sends many mails asks many times. FIDES's quarantined reading with a typed result (section 5.2), which lets a task learn one Boolean from untrusted text without taking the mark, needs labels per value, which D-035 places after version 1. Cost until then: a long task that reads a page once carries the mark to its end.
+
+**2. A label does not follow the influence of content on the model's decision.** Within a task, the mark is coarser than influence: from the first untrusted read, everything the task does is treated as influenced, which covers the control-flow dependencies that CaMeL tracks one by one (section 5.4). Influence leaves a task by four paths, each with a rule: objects (stamped with the writer's marks at each write), the agent's memory (the same), the screen (the mark on the card's frame) and the request (provenance of pasted parts, above). One path is not stopped: the user reads a manipulated answer and acts on it in a new request. CaMeL leaves the same case out (section 3.1) and proposes, as here, to show where the text came from.
+
+**3. An application can lie about the effect class of its actions.** Answered for reach `local` by the fresh instance linked to the class (D-035). Not answered for reach `external`: see [Effect class](#effect-class) and [point 1](#points-for-the-two-owners). The proposed rule (`GET` and `HEAD` only, to declared hosts, for an action of change `none`) narrows it; a server that changes state on `GET` stays out of reach.
+
+**4. An external effect cannot be undone.** Rules: the confirmation shows the exact content (D-035); the hold before execution gives a window to cancel; the journal keeps the input exactly as confirmed, so the user can see what left. Meta's [AB] configuration ("once a human has validated the contents of the draft message") is the same answer. Stays open: once the hold ends, it is done.
+
+**5. A copied budget becomes a shared counter.** Rule: budgets are split, never copied ([Delegation by task](#delegation-by-task)). The kernel already works this way for time: a scheduling context is bound or lent, never duplicated ([scheduling.md](scheduling.md)). Stays open: no published work cited here addresses budgets; the rule rests on seL4 MCS and D-073, not on agent literature.
+
 ## Vulnerabilities
 
 **Proposed, 14 November 2026, to validate.** A `SECURITY.md` file, a disclosure delay of 90 days, and tracking of the fixes of the long-term-support Linux kernel and of Ladybird.

@@ -69,7 +69,7 @@ Acted on in the decisions of 14 November 2026:
 - The announcement of Linux 7.3 as the 2026 long-term-support kernel is not confirmed (see [drivers.md](../architecture/drivers.md#linux-version)).
 - The Barrelfish/DC removal-time figure is withdrawn until the paper is read (see [prior-art.md](prior-art.md#multi-core-structure-precedents)).
 - "Deterministic cycle counts under QEMU" is replaced by instruction counts; the reference desktop is not a runner (see [verification.md](../plan/verification.md)).
-- The defence against a lie on the effect class holds only with a fresh instance per action (see [agent.md](../architecture/agent.md#effect-class)).
+- The defence against a lie on the effect class holds only with a fresh instance per action (see [security.md](../architecture/security.md#effect-class)).
 
 Not confirmed by the review, and still stated in the documentation:
 

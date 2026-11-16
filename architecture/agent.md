@@ -15,8 +15,7 @@ The agent is the AI assistant built into the system. It acts for the user throug
 
 - It acts through the typed actions that each application exports, never by clicking on pixels. System services (settings, windows, network, installation, power) export the same interface: managing the OS is not a separate API.
 - It has three outputs: actions, a declarative 2D interface, and applets (3D and free cases). Applets are objects of the store, reused and fed with data rather than regenerated. The interface format is in [ui.md](ui.md#agent-interface-format).
-- It has no authority of its own: each task receives delegated rights, which are logged and can be cancelled.
-- No agent task combines private data, untrusted content and external communication. This rule targets the agent's tasks (**Decided**, 14 November 2026); it takes up the "lethal trifecta" (Willison) and the "rule of two" (Meta), which are to be cited.
+- It has no authority of its own, and no task combines private data, untrusted content and external communication: see [Security model](#security-model).
 - Reading the accessibility tree of another application is a capability; it also serves the agent as a fallback for web sites, which export no actions (see [ui.md](ui.md#accessibility)).
 
 ## The agent in the contract
@@ -29,53 +28,13 @@ The `agent` world ([contracts/core.wit](../contracts/README.md)) exports one fun
 
 ## Security model
 
-**Decided, 14 November 2026.** The points below are to be written in the page of the security model, before `core.wit` is frozen.
+The security model of the agent (delegation by task, effect classes, provenance marks, the confirmation matrix, the rule against combining the three risks, what the system draws, the agent's entity, speech, and the known weaknesses with their rules) is one page of [security.md](security.md#security-model-of-the-agent), written on 16 November 2026 as the decision of 14 November 2026 asked (D-035, D-036). It is not repeated here.
 
-### Effect class
+<a id="effect-class"></a>
+<a id="known-weaknesses"></a>
 
-The **effect class** of an action says what the action can change. It has two fields:
-
-| Field | Name in the contract | Values |
-|---|---|---|
-| Modification | `change` | `none`, `reversible`, `irreversible` |
-| Scope | `reach` | `local`, `external` |
-
-- The actions and their classes are in the signed package manifest: for each action, its name, description, input schema, output schema and effect class. There is no `list-actions` function: a function could change its answer after installation, and the component would have to run to be asked. The system reads the manifest and serves it to the agent as `action-info`.
-- Each action runs in a fresh instance, on which the system calls only `actions.invoke`. The instance shares no memory with the running application and is destroyed afterwards. It holds only what the request carries (input, bound objects, the `home` collection), attenuated to the class.
-- The imports of an action instance are linked to match its class: storage is read-only when `change` is `none`, and every network import answers `denied` when `reach` is `local`. The declared class is therefore binding, and lying about it gains nothing. Every write to the store is versioned, which is why a store capability is safe to hand to an action whose change is `reversible`.
-- The contract is in [contracts/actions.wit](../contracts/README.md) and [contracts/core.wit](../contracts/README.md).
-
-### Provenance marks
-
-Provenance follows the data. A task carries two marks: "has read private data" and "has read untrusted content".
-
-- In the contract the marks are the flags `private` and `untrusted`, and a provenance is an origin (`system`, `user`, `app:<component>`, `web:<origin>`) plus marks. Provenance is set by the system only, never by the producer. Marks are only ever added; reading data adds its marks to the reading task.
-- The output of an action is untrusted by default for any third-party application. Only the system and the user's own data are trusted; a publisher does not declare itself trusted.
-- A secret field never emits its value to the agent; the value goes to the action directly, read by the system when the button is activated.
-
-### Confirmation matrix
-
-| Action | Task without the "untrusted" mark | Task marked "untrusted" |
-|---|---|---|
-| Local read | Automatic | Automatic |
-| Local reversible modification | Automatic, can be undone | Automatic, can be undone |
-| Local irreversible modification | Confirmation | Confirmation, provenance displayed |
-| External read | Automatic | Automatic without the "private" mark, confirmation otherwise |
-| External modification | Confirmation | Confirmation, provenance and exact content displayed |
-
-- The confirmation screen is drawn by the system from the typed schema of the action and the exact input, never from the text of the model. The agent cannot draw, skip or answer it; a refusal by the user is the error `refused`. It is drawn above the surface concerned (see [ui.md](ui.md#agent-surface)).
-- A suite of injection attacks becomes a gate of the hosted track (see [roadmap](../plan/roadmap.md#calendar)).
-- Labels per value rather than per task (FIDES, RTBAS, IsolateGPT): to read, after version 1.
-
-### Known weaknesses
-
-From the delegated prior-art study of 14 November 2026 (not cross-checked). To address:
-
-- Everything quickly becomes "untrusted" and the user confirms everything.
-- A label does not follow the influence of content on the model's decision.
-- An application can lie about the effect class of its actions (addressed by the fresh instance per action, above).
-- An external effect cannot be undone.
-- A copied budget becomes a shared counter.
+- Effect class: [security.md](security.md#effect-class).
+- Known weaknesses: [security.md](security.md#known-weaknesses).
 
 ## Memory
 
@@ -88,6 +47,7 @@ The agent's memory is made of store objects that belong to the user, with proven
 - The agent is called by a key or by the wake word (see [ui.md](ui.md#agent-surface)).
 - Wake word during sleep: see [platform.md](platform.md#power-and-sleep).
 - The agent's voice dictation goes through the text input protocol, and its speech synthesis is used by the screen reader (see [ui.md](ui.md#input)).
+- The security rules of speech (the always-on detector, the origin of a spoken request, the machine's own sound, synthesis reading a window) are in [security.md](security.md#speech).
 
 ## Related
 

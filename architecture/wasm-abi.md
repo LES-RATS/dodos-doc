@@ -54,7 +54,7 @@ Life cycle:
 - `resume(home)`: called instead of `start` on a new instance when `suspend` completed before, possibly on another device.
 - `show(surface)`: the shell gives the application a surface. It is called after `start` or `resume`, zero or more times: an application can run with no surface and get one later, or several.
 
-The same component is instantiated in two ways: long-lived (`start` or `resume`, later `suspend`), and once per action, as a fresh instance on which the system calls only `actions.invoke` (see [agent.md](agent.md#effect-class)).
+The same component is instantiated in two ways: long-lived (`start` or `resume`, later `suspend`), and once per action, as a fresh instance on which the system calls only `actions.invoke` (see [security.md](security.md#effect-class)).
 
 ### Actions
 
@@ -73,7 +73,7 @@ Actions are what makes a component drivable by the agent. Every component export
 **Decided, 14 November 2026**: a complete revision, as the first contract of step 0 of the [build order](../plan/roadmap.md#build-order). The files at version 0.1.0 carry it:
 
 - `suspend` and `resume` (see [platform.md](platform.md#process-state-suspend-resume-and-snapshots));
-- the effect class in two fields, and actions in the manifest (see [agent.md](agent.md#effect-class));
+- the effect class in two fields, and actions in the manifest (see [security.md](security.md#effect-class));
 - a wide list of errors with a fallback case;
 - `sync`, versions, metadata, rights held, persistence of a received object (`keep`);
 - object picker, drag and drop, clipboard (see [ui.md](ui.md#giving-an-object-to-an-application));

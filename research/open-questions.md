@@ -25,7 +25,7 @@ Each line points to the file that holds the detail.
 | Devices | What other platforms open up; AirPlay, Cast, Miracast, Matter | [devices.md](../architecture/devices.md#to-study) |
 | Security | Executable code for the web content process (JIT of LibJS) | [web.md](../architecture/web.md#jit-in-the-web-content-process) |
 | Security | Disk key, secure boot, accounts, signing keys: proposals to validate | [security.md](../architecture/security.md) |
-| Agent | Known weaknesses of the provenance model; labels per value | [agent.md](../architecture/agent.md#known-weaknesses) |
+| Agent | Known weaknesses of the provenance model; labels per value | [security.md](../architecture/security.md#known-weaknesses) |
 | UI | Shell trial in weeks 1-2, validating gpui; gpui window back end | [ui.md](../architecture/ui.md#shell) |
 | UI | Accessibility tree format | [ui.md](../architecture/ui.md#accessibility) |
 | UI | Ladybird text composition on the project's input protocol | [ui.md](../architecture/ui.md#input) |
