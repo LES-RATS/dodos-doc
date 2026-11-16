@@ -2,7 +2,10 @@
 # The single verification command, identical locally and in CI.
 set -eu
 cd "$(dirname "$0")"
-# Every internal link and anchor must resolve. archive/ and reviews/ are
-# records and are not edited, so they are not checked.
+# Every internal link and anchor must resolve. archive/, reviews/ and
+# research/drafts/ are records of their date and are not edited afterwards
+# (a draft's links name sections that the contract has since renamed), so
+# they are not checked. A link from a checked file into them still is.
 lychee --offline --include-fragments --no-progress \
-  --exclude-path archive --exclude-path reviews .
+  --exclude-path archive --exclude-path reviews \
+  --exclude-path research/drafts .
