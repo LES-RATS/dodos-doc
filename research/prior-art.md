@@ -11,7 +11,7 @@ Statuses are defined in the [README](../README.md#status-legend). Verification m
 | Plan 9 | A single protocol for everything, network transparency, an agent that guards secrets |
 | Genode | Recursive parent-child structure, exchange of resources, a tiny trusted compositor |
 | Horizon | Signed manifest per process, fixed resource limits |
-| Barrelfish | One kernel per core |
+| Barrelfish | Kernels that share no state and talk by messages (one kernel per core there; between nodes of one or several cores here, D-128) |
 | SepOS | Key service with a narrow interface, data protection classes |
 | Minix 3 | Automatic restart of drivers |
 | Nix | A machine described by a declarative file, generations |
@@ -51,12 +51,12 @@ These precedents concern the variants described in [kernel.md](../architecture/k
 **Proposed.**
 
 1. Provenance carried by IPC and enforced by the kernel, to bound what an agent can do with untrusted content.
-2. A multikernel by messages with no shared state, with distributed capability revocation and per-core kernel recovery, backed by formal models. The replicated log remains only a measured comparison point (reworded and **Decided**, 14 November 2026).
+2. A multikernel by messages with no shared state, with distributed capability revocation and per-core kernel recovery, backed by formal models. The replicated log remains only a measured comparison point (reworded and **Decided**, 14 November 2026). D-128 changed the structure this wording rests on: state is shared, with locks, inside a node of several cores, and recovery is of one node; between nodes there is still no shared mutable state other than the words written through the gates. The axis is not reworded until the owners do.
 3. A kernel written from a model by agents, with a differential oracle and bounded proofs.
 4. The task as a kernel object: a single object gathers the delegated rights, the time budget, the provenance label and the log of an agent task, revocable in one operation. As the kernel contract now writes it (D-110, proposed, awaiting the two owners): the task object gathers the provenance marks and the threads of an agent task and stops them in one operation; its rights are removed with its capability spaces, its time is the scheduling contexts of its threads, and its log is the runtime's journal keyed by the task identifier the kernel stamps ([Tasks and marks](../architecture/kernel-interface.md#tasks-and-marks)).
 5. No executable page outside the compile service, enforced by the kernel.
 
-The recovery of one core's kernel, now part of axis 2, was first recorded as a candidate for a further axis to claim (see [kernel.md](../architecture/kernel.md#recovery-of-one-node)).
+The recovery of one node (one core's kernel before D-128), now part of axis 2, was first recorded as a candidate for a further axis to claim (see [kernel.md](../architecture/kernel.md#recovery-of-one-node)).
 
 Honest finding: today the mechanisms of the kernel are all borrowed (model of seL4, structure of Barrelfish). The novelty is in the method, in the combination and in these axes, none of which is designed yet.
 
@@ -72,7 +72,7 @@ The ground is already occupied: an AgenticOS workshop exists (March 2026, then S
 |---|---|
 | (a) The task as a kernel object, revoked in one operation | To claim; the combination appears new. Each brick exists (seL4 MCS, Resource Containers, HiStar and Asbestos, Cinder, Fuchsia jobs). The closest is Agate (AgenticOS '26), with no flow label and no effect log. Defence: a formal model of revocation |
 | (b) Provenance in IPC messages, effect class, and human confirmation as the only way to lift a label | To claim; the combination appears new. The closest: ActPlane (eBPF under Linux) and CaMeL (outside the kernel) |
-| (c) Dynamic core groups | To claim. The clustered multikernel of von Tessin (2012) is the same idea in static form; Barrelfish/DC is it without sharing. Only dynamic grouping is free, and it breaks the proof structure that a static partition brings |
+| (c) Dynamic core groups | To claim. The clustered multikernel of von Tessin (2012) is the same idea in static form; Barrelfish/DC is it without sharing. Only dynamic grouping is free, and it breaks the proof structure that a static partition brings. D-128 fixes a node's cores when it starts and leaves nodes that take and give cores at run time as an open point of the contract |
 | Method (kernel written by agents, seL4 oracle, Kani and Verus) | No precedent found, but hard to defend: the oracle sees only the surface of the ABI |
 | Speculative tasks | Not to present as new: "Fork, Explore, Commit" (arXiv 2602.08199) and "Externalization Barriers" (AgenticOS '26), already published with code |
 | No executable page outside the compile service | Not to present as new: iOS and Singularity |

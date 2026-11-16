@@ -27,7 +27,7 @@ Applications, services and drivers see only stable WIT worlds. Only raw system c
 
 ## Processes and boundaries
 
-Each box is a separate process. Solid arrows are IPC (control); dotted arrows are shared-memory rings (data), which never enter the kernel. Every process enters the kernel of the core it runs on; two are drawn.
+Each box is a separate process. Solid arrows are IPC (control); dotted arrows are shared-memory rings (data), which never enter the kernel. Every process enters the kernel of the node it lives in, which may cover several cores (D-128); two nodes are drawn.
 
 ```mermaid
 flowchart TD
@@ -37,8 +37,8 @@ flowchart TD
     svc["Services: storage, network, GPU, memory, placement"]
     drv["Drivers: native, or Linux driver on the emulation layer"]
     dev["Devices, behind the IOMMU"]
-    k0["Kernel of core 0"]
-    k1["Kernel of core 1"]
+    k0["Kernel of node 0"]
+    k1["Kernel of node 1"]
 
     agent -->|typed actions| app
     app -->|WIT calls| svc
@@ -48,7 +48,7 @@ flowchart TD
     drv -->|registers, interrupts, DMA| dev
     svc -->|system calls| k0
     drv -->|system calls| k1
-    k0 ---|messages only| k1
+    k0 ---|messages, and words written through the gates| k1
 ```
 
 ## How the pieces fit

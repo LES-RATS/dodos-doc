@@ -80,7 +80,7 @@ The Wasm runtime schedules its asynchronous tasks cooperatively; the kernel sees
 
 The case: a background client is inside the service when a frame-class client arrives.
 
-1. **Threads.** A service chooses one thread or one thread per core (**Decided**). With one passive thread per core, a call stays on the caller's core and two cores do not wait for each other.
+1. **Threads.** A service chooses one thread or one thread per core of its node (**Decided**, D-028; a process lives in one node, D-128). With one passive thread per core, a call stays on the caller's core and two cores do not wait for each other.
 2. **Lending.** The waiting client lends its context (budget and deadline) to the client being served, until the service is free. Not in the kernel (D-110, proposed: see [What is not provided](kernel-interface.md#the-budget-follows-the-call)); a service on the frame path has one thread per core or a frame-class context.
 3. **Threshold on entry.** Not in the kernel either (D-110). A call enters only if the remaining budget covers the declared worst case of the call (the latency contract of the capability); otherwise it waits outside for its budget to be refilled. seL4 MCS has this problem open, and the same remedy as a proposal (RFC-14, budget thresholds on endpoints, not merged to the project's knowledge; read through a search summary, merge state not verified).
 4. **Exhaustion all the same.** Exhaustion raises nothing in the kernel: the context waits for its next period (D-110). A server thread that loses the context it ran on raises the fault *no context* to its supervisor ([The budget follows the call](kernel-interface.md#the-budget-follows-the-call)); the request is cancelled and the service returns to its previous state. Cancellable requests are required only of the project's own native services (**Decided**).
@@ -121,5 +121,5 @@ Intel Software Defined Super Cores: patent EP4579444A1 (filed in 2023, published
 
 ## Checks and gates
 
-- Deterministic simulation of the scheduler (same seeds as the messages between cores), and the latency gates.
+- Deterministic simulation of the scheduler (same seeds as the messages between nodes), and the latency gates.
 - Gate added (**Decided**, 14 November 2026): an asynchronous WIT call between two processes, end to end. See [plan/gates.md](../plan/gates.md).

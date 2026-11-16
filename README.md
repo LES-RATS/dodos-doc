@@ -29,7 +29,7 @@ Where the work stands: [plan/progress.md](plan/progress.md).
 |---|---|
 | [thesis.md](thesis.md) | Thesis, principles, scope, licence, what is out of scope |
 | [architecture/overview.md](architecture/overview.md) | Layer diagram and how the pieces fit |
-| [architecture/kernel.md](architecture/kernel.md) | Kernel structure, multi-core by messages, capabilities and revocation, recovery of one core's kernel |
+| [architecture/kernel.md](architecture/kernel.md) | Kernel structure, nodes of one or several cores and messages between nodes, capabilities and revocation, recovery of one node |
 | [architecture/kernel-interface.md](architecture/kernel-interface.md) | Kernel objects, system calls, synchronous and asynchronous paths, data plane, pager, tasks, debugging, language split |
 | [architecture/scheduling.md](architecture/scheduling.md) | Scheduling contexts, classes, placement service, background execution |
 | [architecture/memory.md](architecture/memory.md) | Memory objects, paging, accounting, pressure |

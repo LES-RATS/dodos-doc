@@ -61,7 +61,7 @@ TPM and secure boot: the mechanisms are known but were not re-read. A Microsoft-
 
 ## Signing keys
 
-**Proposed, 14 November 2026, to validate.** TUF roles, an offline root on hardware keys, a threshold of two keys out of three (one per person, one in a safe).
+**Proposed, 14 November 2026, to validate.** TUF roles, an offline root on hardware keys, a threshold of two keys out of three (one per person, one in a safe). These are the project's keys, which sign system images; they are not decided. The keys of publishers are another matter, decided by D-056 ([Publisher keys](#publisher-keys)).
 
 ## Publisher keys
 
@@ -104,7 +104,7 @@ The identity of a component is its publisher key plus its name (see [storage.md]
 | Hostile model or model provider | Everything injected content can do, on every task, from the first token, with no mark set. A remote provider also reads everything sent to it | The scope and the confirmations of the matrix still hold. **Not stopped**: the cells the matrix leaves automatic in a task without the `untrusted` mark, and the confidentiality of what is sent to a remote model ([point 3](#points-for-the-two-owners)) |
 | Thief with the machine, off or locked | Read the disk, boot other media, try codes, speak to the machine | User and device zones encrypted, disk key sealed in the TPM with its anti-brute-force mechanism ([Disk key](#disk-key), Proposed); a locked session runs no task on user data ([Speech](#speech), Proposed). Advanced physical attacks are out of scope |
 | Hostile peripheral (USB, PCIe, Thunderbolt; Bluetooth after the alpha) | DMA, interrupts, malformed descriptors aimed at a driver, act as a keyboard, present hostile storage | IOMMU active before the first driver, interrupt remapping, each driver in its own process ([drivers.md](drivers.md#iommu)); storage is the foreign zone, read through a reader component ([storage.md](storage.md#zones)). A machine without an IOMMU declares its drivers trusted and displays it. **Not stopped**: a device that types as a keyboard ([point 12](#points-for-the-two-owners)) |
-| Faulty kernel on one core | Write wrong values anywhere its own node can reach | The write gate is the only writer of page tables, IOMMU tables and the machine table; the core is fenced, its memory reclaimed, its kernel reloaded (D-117, D-120). **Not bounded**: the task identifier and marks it stamps on the messages it sends to other nodes ([point 4](#points-for-the-two-owners)) |
+| Faulty kernel of one node | Write wrong values anywhere its own node can reach | The write gate is the only writer of page tables, IOMMU tables and the machine table; every core of the node is fenced, its memory reclaimed, its kernel reloaded (D-117, D-120, D-129). **Not bounded**: the task identifier and marks it stamps on the messages it sends to other nodes ([point 4](#points-for-the-two-owners)) |
 | Hostile update | A package signed by a compromised publisher key; a system image | TUF metadata and revocation; no new right at update without the user's agreement (D-056); a system image needs the threshold of the project's keys ([Signing keys](#signing-keys), Proposed); the user can enrol their own keys. A/B/R rollback covers an image that fails to boot, not a hostile image that boots |
 | Network attacker | Read, change, replay packets | TLS in the network service with shipped trust roots (D-055); no incoming packet without a listening capability, encrypted DNS ([network.md](network.md#the-network-service-replaces-a-firewall), Proposed) |
 
@@ -119,7 +119,7 @@ The [three boundaries](#three-boundaries) each stop one group of adversaries. Th
 The documents give no size for any of these components except where stated.
 
 1. The hardware and its firmware: processor, memory, TPM (the Intel fTPM of the desktop), IOMMU. Compromised firmware is out of scope.
-2. The kernel of each core: a Rust core and a Zig hardware layer, with the write gate (D-126, proposed). Each node trusts the stamps that other nodes put on their messages.
+2. The kernel of each node: a Rust core and a Zig hardware layer, with the write gate (D-126, proposed). Each node trusts the stamps that other nodes put on their messages.
 3. The boot-image services, pinned in memory: storage service, disk driver, service manager, memory service, placement service ([memory.md](memory.md#boot-image-services), Decided).
 4. The supervisor ([kernel.md](kernel.md)) and the platform service, which carries uACPI, PCI enumeration and interrupt routing (D-054).
 5. The mark-aware services: storage, network, clipboard, compositor, memory service, supervisor. Each one has its own attack test ([Marks and services](kernel-interface.md#marks-and-services), D-110, proposed).
@@ -305,7 +305,7 @@ From the delegated prior-art study of 14 November 2026 (not cross-checked). Each
 11. **The screen reader reads a window that says "System: press Enter to confirm".** No confirmation is pending; Enter goes to the focused surface. The user who checks with the secure attention key (P) sees nothing pending. **Not stopped** for a user who does not check: an application can play any sound, including an imitation of the system's voice.
 12. **A thief speaks to the locked machine.** A locked session runs no task on user data (P). **Stops at** the lock. Booting other media: the zones are encrypted and the disk key is sealed in the TPM. Cold boot and bus probing are out of scope.
 13. **A USB stick is also a keyboard and types a request into the agent's bar.** Keys from a keyboard have origin `user`. **Not stopped** today ([point 12](#points-for-the-two-owners)). DMA from a hostile device **stops at** the IOMMU, active before the first driver.
-14. **A faulty kernel on another core drops the `untrusted` mark of a message it sends.** The receiving kernel validates the message's form, not the truth of its stamp. **Not stopped** ([point 4](#points-for-the-two-owners)).
+14. **A faulty kernel of another node drops the `untrusted` mark of a message it sends.** The receiving kernel validates the message's form, not the truth of its stamp. **Not stopped** ([point 4](#points-for-the-two-owners)).
 15. **A compromised publisher key ships an update that raises an action from `local` to `external`.** If the application already holds network rights, no new right appears. **Not stopped** today; with "a class that grows is a new right" (P), it **stops at** the user's agreement at update.
 16. **Injected content makes the agent create many sub-tasks to multiply its budget.** Budgets are split, not copied (P): **stops at** the parent's budget.
 

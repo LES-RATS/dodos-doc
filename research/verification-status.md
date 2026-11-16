@@ -42,7 +42,7 @@ Other figures that come from their authors or publisher only: ANR (publisher's f
 To verify before relying on them.
 
 - Detail of the borrowings from recent microkernels (HongMeng, sDDF, seL4 MCS, Asterinas): papers to read in full.
-- Real gain of the per-core kernel for P and E cores, and compared cost of the replicated log and of the kernel per core group: nothing measured.
+- Real gain of nodes of one core against nodes of several cores (D-128) for P and E cores, the cost of locking inside a node, and the compared cost of the replicated log: measured only on the Mac (branch `trial-multicore` of the kernel repository), as an indication to confirm on the reference desktop (D-113).
 - Conferences and dates for publications.
 - Feasibility of the Zig and Rust boundary, and of the event-driven kernel with no per-thread stack.
 - SQLite with a custom VFS in WAL mode.
@@ -76,7 +76,7 @@ Not confirmed by the review, and still stated in the documentation:
 - sDDF: "1 Gb/s saturated at 65 % of one core, where Linux tops out at 500 Mb/s" ([drivers.md](../architecture/drivers.md#driver-framework)).
 - NVK at "less than half" of the proprietary driver on RTX 5080: the direction is confirmed, the figure is not ([gpu.md](../architecture/gpu.md#nvidia-port)).
 - Atmosphere: 6,000 lines, 2.5 person-years and a global lock ([verification.md](../plan/verification.md#formal-proof)).
-- seL4 "discourages IPC between cores" in its multikernel ([kernel.md](../architecture/kernel.md#hard-points)).
+- seL4 "discourages IPC between cores" in its multikernel ([kernel.md](../architecture/kernel.md#hard-points)). kernel.md now marks it as checked by web search on 14 November 2026, on abstracts and official pages, not on the papers.
 - A2UI: version 1.0 exists; the "Express format" was not verified ([ui.md](../architecture/ui.md#agent-interface-format)).
 
 The review also lists what it confirmed against primary sources, and its own sources.

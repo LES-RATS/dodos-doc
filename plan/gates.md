@@ -54,7 +54,7 @@ The latency gates are the authoritative test for the compositor (see [verificati
 | Verification of blobs | Read without verification | ≤ 5 % cold, 0 warm |
 | Memory of an empty application process | | To set |
 | Cost of a minor page fault and of a mapping | Linux | To set |
-| Recovery time of one core's kernel | | To set |
+| Recovery time of one node | | To set |
 | Size of the minimal image (embedded) | | To set |
 | Storage of a demonstration application | Same application under Flatpak | Smaller |
 

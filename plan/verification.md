@@ -54,16 +54,16 @@ The kernel is written from an executable model. The order for the kernel is neve
 
 - **The executable model** is the artefact of the contract lane: re-read by the two humans, protected by `CODEOWNERS`, written by Claude Fable 5.2 from the settled contract, in a session separate from the implementation (decision of the user, 14 November 2026, against the assistant's advice to keep two families). Two first versions, by Gemini 4 Hydrogen and Mistral Large 4, serve only to find the gaps of the contract and are discarded. Because the model and the kernel now come from the same family, the independent checks are: a review of the model against the contract by another family, seL4 as second oracle, and the re-reading by the two humans. The agent that implements cannot modify the model.
 - **At every PR**: a differential test of the implementation against the model, on random call sequences and on interleavings between cores.
-- **seL4 as second oracle.** seL4 stays a second oracle, used as a black box by differential fuzzing, on the common subset. The list of accepted differences is a protected file, with a ratchet. Limit: this oracle covers only the semantics on one core and sees only the surface of the ABI. The one-kernel-per-core model, the IOMMU and the fast path need their own tests.
+- **seL4 as second oracle.** seL4 stays a second oracle, used as a black box by differential fuzzing, on the common subset. The list of accepted differences is a protected file, with a ratchet. Limit: this oracle covers only the semantics on one core and sees only the surface of the ABI. The protocols between nodes, a node of several cores, the IOMMU and the fast path need their own tests.
 - **Fast path in Zig**: an equivalence test, the same corpus with and without the fast path, identical traces.
 - **Verus** (a proof tool for Rust): the properties to prove are written in the contract of the kernel (invariants of the derivation tree, object life cycle, no dangling reference). The escape hatches (`assume`, `admit`, external bodies) enter the ratchet budgets. Humans re-read the specifications, not the proofs.
 - **Three formal models** checked by state exploration: see [kernel.md](../architecture/kernel.md#multi-core-structure).
-- **Deterministic simulation** of the messages between cores (orders and failures replayed from a seed). It kills a kernel at random at every merge and verifies that the rest survives.
+- **Deterministic simulation** of the messages between nodes (orders and failures replayed from a seed). It kills a node at random at every merge and verifies that the rest survives.
 - **Under QEMU**, instructions are counted, not cycles.
 - **Lock-free queues**: systematic exploration of interleavings; load tests on hardware.
 - **Attack tests**: one attack test per boundary (IOMMU, capabilities, executable pages, compile service), which must fail.
 - **Mutation test** on the kernel logic, with a ratchet.
-- **One repository**: the kernel, its model, the oracle harness, the formal models and the [kernel interface](../architecture/kernel-interface.md) live in the kernel repository. `os:core` and the other WIT contracts live in the system repository with the runtime (see [thesis.md](../thesis.md#principles); **Decided**, 14 November 2026).
+- **Two repositories** (D-087, amending D-030): the kernel, its model, the oracle harness, the formal models and the [kernel interface](../architecture/kernel-interface.md) live in the kernel repository. `os:core` and the other WIT contracts live in the system repository with the runtime (see [thesis.md](../thesis.md#principles); **Decided**, 14 November 2026).
 - **Software rendering and a virtio-gpu driver**, to test the compositor under QEMU (see [gpu.md](../architecture/gpu.md#fallback-and-test-paths)).
 
 ### Formal proof

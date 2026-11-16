@@ -58,8 +58,8 @@ Principle: shutdown and crash follow the same path ("crash-only" software, Cande
 |---|---|
 | A component or a service falls | Restart as above. A service reloads its state from storage; an application has the state it saved through `suspend` |
 | Power cut | Blobs are immutable and consistency comes from the SQLite journal (see [storage.md](storage.md#on-disk-format)), so there is no disk check at reboot. Modifiable objects are versioned. The periodic snapshot of processes, which would bound the loss to a few seconds of input (interval to set), is deferred until after the alpha |
-| Panic of one core's kernel | The kernel restarts alone and the machine continues; see [kernel.md](kernel.md#recovery-of-one-node) |
-| Hang | A hardware watchdog (who arms it is open: the kernel contract recommends the platform service, fed by the service manager, since the kernel reads no table that describes it, D-112; see [Open points](kernel-interface.md#open-points)); a heartbeat per service, watched by the service manager; the hang of one core's kernel is detected by the cores group ([Detection](kernel-interface.md#detection-evidence-not-opinion)) |
+| Panic of one node's kernel | The node restarts alone and the machine continues (D-128: recovery is of one node, which may cover several cores); see [kernel.md](kernel.md#recovery-of-one-node) |
+| Hang | A hardware watchdog (who arms it is open: the kernel contract recommends the platform service, fed by the service manager, since the kernel reads no table that describes it, D-112; see [Open points](kernel-interface.md#open-points)); a heartbeat per service, watched by the service manager; the hang of a node is detected by the other nodes, on evidence ([Detection](kernel-interface.md#detection-evidence-not-opinion)), and a core that stops answering its node makes the node accuse itself (D-129) |
 | Reboot loop | A/B/R slots, automatic rollback (see [storage.md](storage.md#updates)) |
 | Requested shutdown | Decided, 14 November 2026: the system calls `suspend` on the running applications with a bounded delay (starting value 500 ms, to calibrate), calls `sync` on storage, then powers off. A crash skips the first step; that is the only difference between shutdown and crash. Devices are reset at boot, not at shutdown |
 
@@ -102,7 +102,7 @@ Principle: shutdown and crash follow the same path ("crash-only" software, Cande
 **Proposed.** Order:
 
 1. Reference desktop.
-2. (1 bis) Headless server image: almost free once the kernel has the disk and the network, and the first ground on which to sell the recovery of one core's kernel. The server image is a decided milestone (**Decided**, 14 November 2026).
+2. (1 bis) Headless server image: almost free once the kernel has the disk and the network, and the first ground on which to sell the recovery of one node. The server image is a decided milestone (**Decided**, 14 November 2026).
 3. Laptops.
 4. Companion application on Android, iOS, Linux, macOS and Windows.
 5. Phones with an unlockable bootloader.
@@ -116,7 +116,7 @@ This order was not written down before 14 November 2026.
 
 - A server runs `wasi:http` components launched per request; native software through POSIX as a library, later.
 - Administration: no remote root shell. The `dodo` tool and the agent go through the key-addressed transport (see [network.md](network.md#key-addressed-services)), with delegated administration capabilities. The configuration of a server is a hash.
-- Arguments: recovery of one core's kernel, kernel update without reboot, boot in one second.
+- Arguments: recovery of one node, kernel update without reboot, boot in one second.
 
 ### Embedded
 
