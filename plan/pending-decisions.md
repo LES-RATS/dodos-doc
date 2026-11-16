@@ -87,16 +87,28 @@ Answers given by one owner on 16 November 2026 (recorded in the decision log as 
 | P-046 | No quarantine of untrusted reading in v1 (point 9) | Both | A: keep the deferral | Firm | — |
 | P-047 | Showing the always-on wake-word microphone (point 6) | Both | A: as recommended | Firm | Compositor indicators |
 | P-048 | Anyone audible is the user (point 7) | Both | A: as recommended | Firm | Voice path |
-| P-049 | A device that types as a keyboard (point 12) | Both | A: accept new keyboards by a key press | Leaning | Input chain |
+| P-049 | A device that types or clicks (point 12) | Both | A: accept every new input device by a gesture on an accepted one | Leaning | Input chain |
 | P-050 | A hold before an external modification | Both | A: 10 s default, setting | Leaning | Journal, contract |
 | P-051 | The agent's figure on screen | Both | A: closed states, drawn by the system | Leaning | Shell design |
 | P-052 | JIT in the web content process | Both | B: no JIT in v1 | Leaning | Ladybird port, security rule |
 | P-053 | The account model | Both | A: as proposed | Leaning | Installer, session |
 | P-054 | A lost key with no escrow | Both | A: as proposed | Leaning | Installer |
-| P-055 | What the disk key is sealed against | Both | A: the signing key | Leaning | Installer, updates |
+| P-055 | What the disk key is sealed against (point 24) | Both | C: the signing key and a minimum version | Leaning | Installer, updates |
 | P-056 | Secure boot route | Both | A: user enrols keys in v1 | Leaning | Signed image, installer |
 | P-057 | The project's signing keys | Both | A: two of three, offline | Firm | First signed release |
 | P-058 | Spread of sticky marks | Measure | Measure on the injection suite | — | D-111 two-way marks |
+| P-092 | Where the mark `private` comes from (point 15) | Both | A: by zone, at read | Leaning | Storage service, matrix |
+| P-093 | A local write of a package that holds the network (point 16) | Both | A: external in a marked task | Leaning | `invoke`, `world service` |
+| P-094 | `keep` in an action instance (point 17) | Both | A: read only | Firm | `world service` |
+| P-095 | Secret fields (point 18) | Both | A: `os-secret` only, always confirmed | Firm | Catalogue, `invoke` |
+| P-096 | Answering a confirmation (point 19) | Both | A: own keys, focus moved by the user | Firm | Compositor, P-049 |
+| P-097 | Captures and system material (point 20) | Both | A: blanked | Firm | Capture path |
+| P-098 | Direct scanout and system elements (point 21) | Both | B: stops except for the discreet mark | Leaning | Compositor, latency gate |
+| P-099 | A button that carries an action (point 22) | Both | A: overlay and own notifications only | Leaning | Catalogue, notifications |
+| P-100 | Third-party words in a confirmation (point 23) | Both | A: outside system material, labelled | Firm | Confirmation drawing |
+| P-101 | Dependency changes in the maintenance lane (point 25) | Both | B: another model family reviews | Leaning | D-032, CI |
+| P-102 | A grant for the rest of a task and a later mark (point 27) | Both | A: ends with the mark | Firm | `invoke` |
+| P-103 | `focus-surface` (point 28) | Both | A: as recommended | Leaning | Shell actions |
 | **Storage, memory, platform, network, media, devices** | | | | | |
 | P-059 | How long versions are kept | Both | A: as proposed | Leaning | Storage service |
 | P-060 | Packages shared between users, unencrypted | Both | A: as proposed | Leaning | Zones, installer |
@@ -639,7 +651,7 @@ Answers given by one owner on 16 November 2026 (recorded in the decision log as 
 
 ## Group 3 — Security
 
-The points of this group come from the new [security.md](../architecture/security.md) (on `origin/main`, commit `af51cc5`), whose "Points for the two owners" (lines 312-329) give fourteen points with a recommendation each; their sources were verified on 16 November 2026 (line 132). The three items of P-036, P-037 and P-042 are also marked `OPEN (owners)` in the contracts.
+The points of this group come from the new [security.md](../architecture/security.md) (on `origin/main`, commit `af51cc5`), whose "Points for the two owners" (lines 312-329) give fourteen points with a recommendation each; their sources were verified on 16 November 2026 (line 132). The three items of P-036, P-037 and P-042 are also marked `OPEN (owners)` in the contracts. Points 15 to 28 were added later on 16 November 2026, from the reviews of the WIT contracts and of the security page and their verifications: P-092 to P-103, and updates to P-049, P-052 and P-055; most are also marked `OPEN (owners)` in the contracts.
 
 ## P-035 — What the threat model leaves out
 
@@ -675,7 +687,7 @@ The points of this group come from the new [security.md](../architecture/securit
 
 **Where.** [security.md](../architecture/security.md) point 3 (line 318) on `origin/main`; `DodOS: contracts/agent.wit:28-34`, `OPEN (owners)`.
 
-**Options.** A. As recommended. Gives: a hostile provider cannot run the automatic cells unseen, such as an external read carrying private data in its address (attack 6). Costs: more confirmations with a remote model. B. Trust the chosen provider, put it on the trusted list, say so to the user.
+**Options.** A. As recommended. Gives: a hostile provider cannot run the automatic cells unseen, such as an external read carrying private data in its address (attack 6). Costs: more confirmations with a remote model. B. Trust the chosen provider, put it on the trusted list, say so to the user. C. Every task counts as `untrusted` for the matrix from its first token, whatever the model. Costs: with P-092, almost every external read is confirmed. D. Local weights not signed by the project count as remote. Costs: a model the user installed is confirmed like a remote one. With A, a hostile local model stays a residual (security.md, row of the hostile model).
 
 **Recommendation.** A: the principle of the page is that the model is not trusted to decide, and D-035 already makes third-party output untrusted. *Firm.*
 
@@ -711,7 +723,7 @@ The points of this group come from the new [security.md](../architecture/securit
 
 **Where.** [security.md](../architecture/security.md) line 163 and point 14 (line 329) on `origin/main`, Open.
 
-**Options.** A. Everything minus exclusions. Gives: no component guesses the scope; protection comes from the class, the marks, the journal and revocation. Costs: a steered model can name any installed action (it still meets the matrix). B. A router chooses per request. Costs: one more component to trust, which reads the request.
+**Options.** A. Everything minus exclusions. Gives: no component guesses the scope; protection comes from the class, the marks, the journal and revocation. Costs: a steered model can name any installed action (it still meets the matrix). B. A router chooses per request. Costs: one more component to trust, which reads the request. C. The surfaces open and the applications the request names. Costs: "do X" with an application that is not open needs the user to name it.
 
 **Recommendation.** A. *Leaning.*
 
@@ -795,7 +807,7 @@ The points of this group come from the new [security.md](../architecture/securit
 
 **Where.** [security.md](../architecture/security.md) line 266 and point 6 (line 321) on `origin/main`; `DodOS: contracts/agent.wit:192`.
 
-**Options.** A. As recommended. B. No mark for the detector. Costs: the microphone indicator is no longer the whole truth.
+**Options.** A. As recommended. B. No mark for the detector. Costs: the microphone indicator is no longer the whole truth. C. The wake word off by default, voice on request. Costs: it touches the Aligned line "Voice detection is always active" (agent.md). The mark does not stop direct scanout (P-098).
 
 **Recommendation.** A. *Firm.*
 
@@ -815,11 +827,11 @@ The points of this group come from the new [security.md](../architecture/securit
 
 ## P-049 — A device that types as a keyboard (security point 12)
 
-**Question.** Is a newly connected keyboard accepted only after a key press on a keyboard already accepted, or at the lock screen?
+**Question.** Is a newly connected input device (keyboard, mouse, touch screen, tablet) accepted only after a key press or a click on a device already accepted, or once the user's code has been typed on it at the lock screen? A device plugged in while the session is locked is not accepted by being plugged in. Updated on 16 November 2026 from the security reviews: a device that clicks can answer a confirmation, so keyboards alone are not enough (P-096).
 
 **Where.** [security.md](../architecture/security.md) point 12 (line 327) on `origin/main`; attack 13.
 
-**Options.** A. As recommended. Costs: one key press when plugging a keyboard. B. Accept every keyboard, as other systems do. Costs: a USB stick that types can drive the agent with origin `user`.
+**Options.** A. As recommended. Costs: one key press or click when plugging a device; friction when a mouse is replaced; a first device is accepted at installation. B. Keyboards only. Costs: a device that reports as a pointer answers a confirmation. C. Accept every device, as other systems do. Costs: a USB stick that types can drive the agent with origin `user`.
 
 **Recommendation.** A. *Leaning*: it adds friction every user sees.
 
@@ -859,7 +871,7 @@ The points of this group come from the new [security.md](../architecture/securit
 - **A. Allow it**, for the content process only. Gives: JavaScript speed. Costs: an executable page in a process that runs hostile code; the chain-of-trust rule gets an exception.
 - **B. No JIT in version 1**; LibJS's interpreter only. Gives: the rule holds without exception. Costs: slower JavaScript on heavy sites.
 
-**Recommendation.** B for version 1, revisited with measures on real sites. *Leaning.*
+**Recommendation.** B for version 1, revisited with measures on real sites. *Leaning.* Whatever the answer, a web application that holds WIT interfaces runs without the JIT (security.md point 26). Alternative for those: follow this answer. Costs: an executable page next to the user's capabilities.
 
 **Blocks.** The Ladybird port; the final wording of the chain of trust. **Who answers.** Both owners.
 
@@ -893,9 +905,9 @@ The points of this group come from the new [security.md](../architecture/securit
 
 **Where.** [security.md](../architecture/security.md) line 54, Proposed. "TPM and secure boot: the mechanisms are known but were not re-read" (line 60; [verification-status.md](../research/verification-status.md) line 55).
 
-**Options.** A. Against the signing key. Costs: any image signed by the project unlocks the disk. B. Against the hash. Costs: every update needs the recovery key or a re-seal step.
+**Options.** A. Against the signing key. Costs: any image signed by the project unlocks the disk, including an old one with a known flaw (TCG, TPM 2.0 Library Part 1, `TPM2_PolicyAuthorize`: every policy signed with the key satisfies it). B. Against the hash. Costs: every update needs the recovery key or a re-seal step. C. Against the signing key and a minimum version in a TPM NV index raised by security updates (`TPM2_PolicyAuthorizeNV`, or a counter). Gives: updates do not break unlocking, and an old signed image no longer unlocks. Costs: one NV index and one write per security update.
 
-**Recommendation.** A, after an agent verifies the TPM mechanism, which is from memory. *Leaning.*
+**Recommendation.** C (security.md point 24; the mechanism was read at the TCG source by the security review's verifier on 16 November 2026). *Leaning.*
 
 **Blocks.** The installer; updates. **Who answers.** Both owners.
 
@@ -925,13 +937,199 @@ The points of this group come from the new [security.md](../architecture/securit
 
 ## P-058 — Spread of sticky marks (measure)
 
-**Question.** With marks flowing both ways when a capability is transferred (D-111), how many services end up marked in normal use?
+**Question.** With marks flowing both ways when a capability is transferred (D-111), how many services and long-lived applications end up marked in normal use?
 
 **Where.** [kernel-interface.md](../architecture/kernel-interface.md#open-points), Open points (line 2105); D-111 (line 121).
 
 **What to measure.** On the hosted injection suite, then on the kernel: the services marked after typical sessions, and the confirmations per task. D-111 stands; the number tells whether the rule must be narrowed to capabilities with `write`.
 
 **Who answers.** A measure.
+
+## P-092 — Where the mark `private` comes from (security point 15)
+
+**Question.** Which data carries `private`? Today no rule says so: a file an application saved outside any task carries no mark, so reading the user's files never marks a task `private`, and the one cell of the matrix that depends on it (an external read in a task marked `private` and `untrusted`) never fires.
+
+**Where.** [security.md](../architecture/security.md), "Provenance marks" and point 15; `DodOS: contracts/core.wit` (`provenance`, `OPEN`), `contracts/store.wit` (`object-info`); found by three reviewers (`reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N9, `security-review-1-verify-hydrogen-by-opus.md` N1, `security-review-1-verify-deepseek-by-mistral.md` finding 1).
+
+**Options.**
+- **A. By zone, at read.** The storage service adds `private` to every read from the user, application, snapshot and device zones; cache and ephemeral keep the writer's marks; system and packages none; `untrusted` follows the writer and the origin. Gives: the matrix's cell fires on the user's data, including data already stored. Costs: almost every task that touches the user's data or an application's `home` is `private`; once also `untrusted` (P-037, P-042 make that frequent), every external read is confirmed, and a remote model without leave for private data is refused.
+- **B. By writer, as today.** Gives: no confirmation added. Costs: the confirmation D-036 relies on almost never appears.
+- **C. The application zone only when its manifest asks.** Gives: fewer confirmations for feed readers, weather or maps. Costs: an application that forgets leaves its secrets unmarked, and the producer decides, against "never by the producer".
+- **D. Downloads excluded.** Gives: fewer confirmations after reading public files. Costs: a downloaded bank statement is unmarked unless the user marks it.
+
+**Proposed today.** A is written in the page and the contracts. Stamping `private` at write time was rejected: it misses data already stored.
+
+**Recommendation.** A; the injection suite counts the confirmations it adds (P-045, P-058). *Leaning.*
+
+**Blocks.** The storage service's marks; the matrix. **Who answers.** Both owners.
+
+## P-093 — A local write of a package that holds the network (security point 16)
+
+**Question.** An action of change `reversible`, reach `local`, writes into `home`; the long-lived instance of the same package holds the right "network", runs outside any task, and can send what was written. How is that kept from defeating the matrix?
+
+**Where.** [security.md](../architecture/security.md), "Effect class" and point 16; `DodOS: contracts/core.wit` (`world service`, `OPEN`), `contracts/actions.wit` (`invoke`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N1 and C2, and the alternatives table of `wit-review-1-verify-opus-new-findings-by-hydrogen.md` ("Deep comparison").
+
+**Options.**
+- **A. In a task marked `untrusted`, decided as an external modification** (confirmed, held, counted in the external budget, not undoable once done); automatic in an unmarked task. Gives: no silent path in a marked task. Costs: confirmations for the writes of networked applications in marked tasks; the residual of a hostile local model in an unmarked task stays, stated in the threat model.
+- **B. The same in every task.** Costs: every edit of a syncing application asks (a note saved, an event added; five items checked are five confirmations), even with no mark.
+- **C. A read-only or separate `home` for action instances.** Gives: no confirmation. Costs: stateful actions of networked applications break (mail drafts, an application's own database, an MCP adapter's token).
+- **D. The network service refuses a request from a sender marked `private` and `untrusted` unless the task service confirmed.** Gives: no confirmation at `invoke`. Costs: the confirmation would carry no typed input, only a raw request; an honest application loses background sync after any marked edit, since its long-lived instance takes the marks of what it reads.
+
+**Proposed today.** A, with a known limit: an instance of reach `external` reads its own `home` after the matrix decided and may send it to its own hosts, which its long-lived instance can do anyway.
+
+**Recommendation.** A. *Leaning*: it reopens a line of security.md that rests on D-035.
+
+**Blocks.** `invoke` and `world service` in the contracts. **Who answers.** Both owners.
+
+## P-094 — `keep` in an action instance (security point 17)
+
+**Question.** The fresh instance of an action imports `keep`, the component's table of kept capabilities. What may it do with it?
+
+**Where.** [security.md](../architecture/security.md) point 17; `DodOS: contracts/core.wit` (`world service`), `contracts/store.wit` (`keep`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` finding 1 and C3, `wit-review-1-verify-hydrogen-by-deepseek.md` finding 1.
+
+**Options.**
+- **A. Read only**: `get` and `slots`, `get` attenuated to the class, `put` and `forget` refused. Gives: nothing the request carried outlives the instance; an action can use a capability the application kept. Costs: none in confirmations.
+- **B. `keep` refused entirely.** Gives: the instance holds strictly what its request carries. Costs: an action cannot use a folder the user picked once; the request must carry it.
+
+**Recommendation.** A. *Firm.*
+
+**Blocks.** `world service`. **Who answers.** Both owners.
+
+## P-095 — Secret fields (security point 18)
+
+**Question.** A secret field can feed any property of an action, and a reversible local action that receives the password runs unconfirmed and writes it into the journal. What are the rules?
+
+**Where.** [security.md](../architecture/security.md), "Confirmation matrix" and point 18; `DodOS: contracts/catalog.wit` (`field`), `contracts/manifest.wit` (`os-secret`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N2 and C1 with Hydrogen's amendment, `security-review-1-verify-deepseek-by-mistral.md` C2.
+
+**Options.**
+- **A.** A secret field feeds only a property marked `os-secret`, judged on the tree an update leaves; an action that receives a secret is confirmed whatever its class, the secret shown masked and written as null in the journal; a secret field on the agent's overlay is refused while the task is marked `untrusted`. Costs: one confirmation per secret handed over; the grant for the rest of a task covers repeats in an unmarked task.
+- **B. The matrix alone, as before.** Costs: a password reaches a reversible local action unconfirmed.
+
+**Recommendation.** A. *Firm.*
+
+**Blocks.** The catalogue's checks; `invoke`. **Who answers.** Both owners.
+
+## P-096 — Answering a confirmation (security point 19)
+
+**Question.** Which input answers a confirmation, and when does it take the focus?
+
+**Where.** [security.md](../architecture/security.md), "Proposed rules for the confirmation itself" and point 19; `reviews/2026-11-16-security-review-1-verify-deepseek-by-mistral.md` finding 6 and C7, `security-review-1-verify-hydrogen-by-opus.md` correction 6 and Q5.
+
+**Options.**
+- **A.** A click or a touch on it, or Return or Space while it holds the focus; it takes the focus only when the user moves it there; a keystroke begun before it appeared cannot reach it; and every new device that can give origin `user` is accepted first (P-049). Costs: no confirmation added; the friction of P-049.
+- **B. Any key while it holds the focus, as before.** Costs: a keystroke meant for another window answers it.
+- **C. A, with keyboards alone accepted.** Costs: a device that clicks answers it.
+
+**Recommendation.** A. *Firm.*
+
+**Blocks.** The compositor's confirmation; P-049. **Who answers.** Both owners.
+
+## P-097 — Captures and system material (security point 20)
+
+**Question.** Does a screenshot or recording made by an application include the confirmation, the secure attention view and the indicators?
+
+**Where.** [security.md](../architecture/security.md), "Provenance marks" and point 20; `reviews/2026-11-16-security-review-1-verify-deepseek-by-mistral.md` finding 10 and C3.
+
+**Options.**
+- **A. Blanked** in every captured frame not made by the system. Costs: no confirmation added; a recording shows blank areas.
+- **B. The capture's marks only, as today.** Costs: an application with the capture right sees a confirmation and sends it with its own network right.
+
+**Recommendation.** A. *Firm.*
+
+**Blocks.** The compositor's capture path. **Who answers.** Both owners.
+
+## P-098 — Direct scanout and system elements (security point 21)
+
+**Question.** When a full-screen surface is scanned out directly, what happens when a system element must be shown?
+
+**Where.** [ui.md](../architecture/ui.md#compositor) and [security.md](../architecture/security.md) point 21; `reviews/2026-11-16-security-review-1-verify-hydrogen-by-opus.md` finding 2 and Q4.
+
+**Options.**
+- **A. Scanout stops for every system element**, the detector's discreet mark included. Costs: no direct scanout while the wake word is on.
+- **B. It stops for a confirmation, the secure attention view and the full microphone, camera and capture indicators, not for the discreet mark.** Costs: the discreet mark is not shown over a full-screen surface.
+- **C. System elements on a hardware plane** above the scanout plane, if the GPU trial shows planes (gpu.md, from memory).
+
+None adds a confirmation; the latency gate is measured with no system element shown.
+
+**Recommendation.** B now, C if the GPU trial shows planes. *Leaning.*
+
+**Blocks.** The compositor; the latency gate's conditions. **Depends on** P-073. **Who answers.** Both owners.
+
+## P-099 — A button that carries an action (security point 22)
+
+**Question.** The catalogue's `button` can carry an action "through the task", but an application's surface has no task. Where may such a button appear, and in which task does it run?
+
+**Where.** [security.md](../architecture/security.md), "Delegation by task" and point 22; `DodOS: contracts/catalog.wit` (`button`), `contracts/ui.wit` (`update`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` N5, judged by Hydrogen (C9 wrong), `wit-review-1-verify-hydrogen-by-deepseek.md` N1, `security-review-1-verify-deepseek-by-mistral.md` N5.
+
+**Options.**
+- **A.** Refused on an application's own surface; on the agent's overlay, in the overlay's task; on a notification, only an action of the notifying package, with no bound item, in a task opened for that one call, marked `untrusted`, whose scope is that action; the click is not a confirmation. Costs: no confirmation added.
+- **B. On an application surface, the owner's own actions in a one-call task** (Hydrogen's replacement). Costs: less strict, and it gives nothing the application cannot do by handling its own events.
+- **C. Any action from any surface in a one-call task.** Costs: one click on a hostile application's button runs another application's local actions unconfirmed and hands their output to the hostile one. Rejected.
+
+**Recommendation.** A. *Leaning*: notifications have no interface yet.
+
+**Blocks.** The catalogue's checks; the notification interface. **Who answers.** Both owners.
+
+## P-100 — Third-party words in a confirmation (security point 23)
+
+**Question.** The confirmation is drawn from the action's schema, whose titles and descriptions the publisher wrote. May they appear in system material?
+
+**Where.** [security.md](../architecture/security.md), "Confirmation matrix" and point 23; `reviews/2026-11-16-security-review-1-verify-deepseek-by-mistral.md` finding 5 and C6.
+
+**Options.**
+- **A. Schema titles shown outside system material, labelled with the publisher's name**; nothing a publisher or a model wrote in system material.
+- **B. No schema titles or descriptions at all.** Costs: raw property names are unreadable.
+- **C. As before, unstated.** Costs: glass vouches for the publisher's words.
+
+None changes the number of confirmations.
+
+**Recommendation.** A. *Firm.*
+
+**Blocks.** The drawing of confirmations. **Who answers.** Both owners.
+
+## P-101 — Dependency changes in the maintenance lane (security point 25)
+
+**Question.** Does a dependency change that alters what ships in a signed image still merge alone in the maintenance lane when the checks pass (D-032)?
+
+**Where.** [security.md](../architecture/security.md), row "Compromised dependency or build" and point 25; D-032; `reviews/2026-11-16-security-review-1-verify-hydrogen-by-opus.md` finding 9.1 and Q8.
+
+**Options.**
+- **A. As D-032.** Costs: a compromised dependency, port, pin or firmware blob reaches a signed image with no review.
+- **B. A change to what ships in a signed image (lockfiles, vcpkg ports, Nix pins, firmware blobs, build scripts) needs the review of another model family**, as the function lane does. Costs: one more review on those changes; it reopens D-032 for that one case.
+- **C. Such changes go to the contract lane**, reviewed by humans. Costs: slow for every pin.
+
+**Recommendation.** B. *Leaning.*
+
+**Blocks.** D-032; the CI of the three repositories. **Who answers.** Both owners.
+
+## P-102 — A grant for the rest of a task and a later mark (security point 27)
+
+**Question.** The user allows an action for the rest of an unmarked task; the task is marked `untrusted` afterwards. Does the grant survive, and what does it cover?
+
+**Where.** [security.md](../architecture/security.md), "Proposed rules for the confirmation itself" and point 27; `DodOS: contracts/actions.wit` (`invoke`); `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` finding 5 and C4, `security-review-1-verify-hydrogen-by-opus.md` N10, `security-review-1-verify-deepseek-by-mistral.md` C8.
+
+**Options.**
+- **A. The grant ends when the task takes the mark**; an object argument is pinned to its version; a call that binds a collection always asks. Costs: one more confirmation in a task marked after the grant.
+- **B. The grant survives the mark.** Costs: injected steps can repeat the call unconfirmed.
+
+**Recommendation.** A. *Firm.*
+
+**Blocks.** `invoke`. **Who answers.** Both owners.
+
+## P-103 — `focus-surface` (security point 28)
+
+**Question.** The shell's action `focus-surface` is class `none`, so it runs automatically, but it decides where the user's next keys go. What limits it?
+
+**Where.** [security.md](../architecture/security.md) point 28; `DodOS: contracts/shell.wit`; `reviews/2026-11-16-wit-review-1-verify-deepseek-by-opus.md` finding 4 and C7, judged partly right by Hydrogen.
+
+**Options.**
+- **A.** `denied` for the agent's bar and for a confirmation; `busy` while the user types into another surface (keys typed into the bar do not count, so "focus the terminal" works at once); no window that drops keys; confirmed in a task marked `untrusted`. Costs: one confirmation per focus change in a marked task.
+- **B. Automatic in every task, with `busy` and 500 ms of dropped keys** (the first proposal). Costs: it breaks a focus request typed in the bar, and lets a steered task move the focus after a pause.
+- **C. Class `none`, as before.** Costs: a steered task sends the user's next keys to another application.
+
+**Recommendation.** A. *Leaning.*
+
+**Blocks.** The shell's actions. **Who answers.** Both owners.
 
 ---
 

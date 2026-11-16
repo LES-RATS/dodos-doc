@@ -63,7 +63,7 @@ Principle: shutdown and crash follow the same path ("crash-only" software, Cande
 | Reboot loop | A/B/R slots, automatic rollback (see [storage.md](storage.md#updates)) |
 | Requested shutdown | Decided, 14 November 2026: the system calls `suspend` on the running applications with a bounded delay (starting value 500 ms, to calibrate), calls `sync` on storage, then powers off. A crash skips the first step; that is the only difference between shutdown and crash. Devices are reset at boot, not at shutdown |
 
-**Black box.** A ring buffer of the last seconds of messages per task, always active, attached to the crash report. The report stays local; the agent can explain it. A report leaves the machine only with the user's agreement, report by report (see [project-level questions](../research/open-questions.md#project-level-questions)).
+**Black box.** A ring buffer of the last seconds of messages per task, always active, attached to the crash report. The report is stored in the user zone, and reading it marks the reading task with the marks of the messages it holds. The report stays local; the agent can explain it. A report leaves the machine only with the user's agreement, report by report (see [project-level questions](../research/open-questions.md#project-level-questions)).
 
 ## Observability
 

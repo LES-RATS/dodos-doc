@@ -35,7 +35,7 @@ Comparison with Fuchsia (verified 14 November 2026, official documentation): boo
 **Proposed.** The disk carries two partitions:
 
 1. An EFI partition in FAT32, required by the firmware. It carries the signed boot images of the A/B/R slots and is written only by the update.
-2. The store, which carries everything else, plus a small raw region for the crash trace.
+2. The store, which carries everything else, plus a small raw region for the crash trace, encrypted with the device key, since the user ring and the black box can hold the user's data.
 
 ## Zones
 
@@ -60,6 +60,8 @@ Notes:
 - The POSIX view of ported software is built by the name table of the process: `/tmp` goes to the ephemeral zone, the home directory to the application zone (see [wasm-abi.md](wasm-abi.md#how-userland-builds-against-the-os)).
 - Factory reset: erase the device and user zones.
 - Embedded: system and device zones only.
+- Start-up order: the boot image reads the system zone, which is not encrypted; the service manager starts the TPM driver and the key service from it; the key service unseals the device key and opens the device zone; the user's code then opens the user key.
+- Marks: a read from the user, application, snapshot or device zone adds the mark `private`, whoever wrote the data; cache and ephemeral objects keep their writer's marks; system and package blobs carry none (**Proposed**, 16 November 2026; [security.md](security.md#provenance-marks)).
 
 ## Blobs
 

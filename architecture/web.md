@@ -30,6 +30,8 @@ Still to add or wire: WebGPU in LibWeb (see [gpu.md](gpu.md#gpu-for-applications
 
 **Aligned.** Each site is a principal (an identity that holds rights), with a fixed "web world".
 
+A site is a scheme and a registrable domain; provenance names the origin (**Proposed**, 16 November 2026).
+
 - One process per web site (see [security.md](security.md#three-boundaries)).
 - The web is a surface like the others. Web sites export no actions; the agent falls back on the accessibility tree for them (see [agent.md](agent.md#how-the-agent-acts)).
 
@@ -37,7 +39,7 @@ Still to add or wire: WebGPU in LibWeb (see [gpu.md](gpu.md#gpu-for-applications
 
 - The WIT interfaces granted by the manifest appear as ES modules (`import { open } from "os:core/store"`), with the mapping of jco: a resource becomes a class, a `result` an exception, an async function a `Promise`, a stream a `ReadableStream`.
 - This is reserved for signed packages, never for ordinary sites.
-- JS and TS of web applications run on LibJS.
+- JS and TS of web applications run on LibJS, without the JIT whatever P-052 answers for the web content process (**Proposed**, 16 November 2026; [security.md](security.md#points-for-the-two-owners), point 26).
 - Debugging uses the developer tools of Ladybird.
 
 ## JIT in the web content process

@@ -11,6 +11,7 @@ This file covers the compositor, the shell, the agent's interface, the design sy
 - A small system compositor in Rust, written by the project, which assembles finished buffers. The Compositor of Ladybird, the shell and the GPU service are its clients.
 - From the first version: shared buffers without copy; direct scanout of a full-screen surface (the surface's buffer is sent to the screen as it is, with no composition and no added frame); and a frame callback with a deadline, so that a client's content leaves at the same refresh.
 - Direct scanout stays decided subject to the GPU trial (**Decided**, 14 November 2026; see [gpu.md](gpu.md#trial-at-the-head-of-the-track)).
+- Direct scanout stops, and the compositor composes, whenever a confirmation, the secure attention view or a full microphone, camera or capture indicator must be on screen, or any other surface above the full-screen one; it resumes when none is. The detector's discreet mark does not stop it. The latency gate of full-screen WebGPU is measured with no system element shown (**Proposed**, 16 November 2026; alternatives in [security.md](security.md#points-for-the-two-owners), point 21: stop for the discreet mark too, or a hardware plane if the GPU trial shows planes).
 - Intermediate step: a separate video buffer, placed on a hardware plane.
 - Afterwards: a protocol where Ladybird hands over several layers, for web layer animations.
 - **Displays** (**Decided**, 14 November 2026): several screens, scaling per screen and hot-plugging are in the compositor's contract.
