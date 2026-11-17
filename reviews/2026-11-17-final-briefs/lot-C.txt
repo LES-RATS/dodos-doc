@@ -1,0 +1,9 @@
+model/src/boot.rs
+model/src/cores.rs
+model/src/grants.rs
+model/src/irq.rs
+model/src/nodes.rs
+model/src/rings.rs
+model/src/roles.rs
+model/src/system.rs
+model/src/units.rs

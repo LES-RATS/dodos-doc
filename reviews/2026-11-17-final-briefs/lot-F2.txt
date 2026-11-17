@@ -1,0 +1,14 @@
+model/tests/blocks.rs
+model/tests/boot.rs
+model/tests/cores.rs
+model/tests/debug.rs
+model/tests/faults.rs
+model/tests/gate_attack.rs
+model/tests/gate_classes.rs
+model/tests/gate_words.rs
+model/tests/generations.rs
+model/tests/irq.rs
+model/tests/memory.rs
+model/tests/sched.rs
+model/tests/tasks.rs
+model/tests/verify7_deepseek.rs
