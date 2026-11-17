@@ -6,7 +6,7 @@ The mechanism is in the kernel and the policy is in user space.
 
 ## Mechanism in each node's kernel
 
-- Each physical core of a node has its own queues; a node of several cores shares its objects under locks (D-128, D-129, [A node of several cores](kernel-interface.md#a-node-of-several-cores)).
+- Each physical core of a node has its own queues; a node of several cores shares its objects under one node lock (D-128, D-129, D-138, [A node of several cores](kernel-interface.md#a-node-of-several-cores)).
 - A thread runs only if it holds a **scheduling context**: a kernel object designated by a capability, which carries a budget, a period, a deadline, a slack class and the set of cores where it may be placed (model of seL4 MCS). Which kind of core a context goes to is the placement service's choice, expressed by that set ([Unlike cores](kernel-interface.md#unlike-cores)).
 - The kernel picks the nearest deadline among the contexts that still have budget, and gives the time that none of them wants to throttled contexts, by class (D-110, see [What runs next](kernel-interface.md#what-runs-next)).
 - The kernel moves a thread only within the set of cores that the placement service has authorised for it (**Decided**, 14 November 2026).

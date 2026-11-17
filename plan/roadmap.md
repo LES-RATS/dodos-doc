@@ -35,7 +35,7 @@ On QEMU, then on the reference desktop:
 
 0. The [kernel interface](../architecture/kernel-interface.md) (objects and system calls), written before any kernel code. Then debugging before features: serial console, debugger stub, trace buffer, crash record; a small native shell and tools as soon as a first process runs. The kernel boots on the reference desktop from the first week, not only on QEMU (**Decided**, 14 November 2026).
 1. Platform bring-up (UEFI, ACPI, PCI, interrupts, timers, start of the other cores), capabilities, IPC, model and oracle on one core.
-2. Nodes of one core first, talking by the reduced set of D-128 (grants of frames, stamped sends, signals, roles, recovery), then nodes of several cores (D-128: a multithreaded process lives in one node); recovery of a node, scheduling, memory, mlibc and the Rust standard library, first native service, virtio.
+2. Nodes of one core first, talking by the reduced set of D-128 (grants of frames, stamped sends, signals, roles, recovery), then nodes of several cores (D-128: a multithreaded process lives in one node), under one node lock (D-138: a lock per object only if the measure on the reference desktop asks for it); recovery of a node, scheduling, memory, mlibc and the Rust standard library, first native service, virtio.
 3. IOMMU, native NVMe driver, keyboard, network stack, Linux emulation for the network card, server image.
 4. NVIDIA core, NVK, GPU service, USB, audio.
 
