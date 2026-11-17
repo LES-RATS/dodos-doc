@@ -116,7 +116,7 @@ This order was not written down before 14 November 2026.
 
 - A server runs `wasi:http` components launched per request; native software through POSIX as a library, later.
 - Administration: no remote root shell. The `dodo` tool and the agent go through the key-addressed transport (see [network.md](network.md#key-addressed-services)), with delegated administration capabilities. The configuration of a server is a hash.
-- Arguments: recovery of one node, kernel update without reboot, boot in one second.
+- Arguments: recovery of one node, boot in one second. A new version of the kernel takes a reboot (D-136); only a second kernel shipped in the same boot image replaces a node's kernel without one.
 
 ### Embedded
 
