@@ -1,0 +1,523 @@
+diff --git a/model/src/check.rs b/model/src/check.rs
+index da4fdd0..c108c3a 100644
+--- a/model/src/check.rs
++++ b/model/src/check.rs
+@@ -46,7 +46,7 @@ pub struct Census {
+     /// Threads that wait on a fault, and of these, by the kind of their
+     /// fault while it is queued.
+     pub faulting: usize,
+-    pub fault_kinds: [usize; 9],
++    pub fault_kinds: [usize; 10],
+     /// Contexts throttled, lends, armed timers, threads marked as having
+     /// lost their context.
+     pub throttled: usize,
+@@ -126,10 +126,10 @@ impl Model {
+             detaching: self.iommus.values().map(|u| u.detaching.len()).sum(),
+             faulting: self.threads.values().filter(|t| t.faulting).count(),
+             fault_kinds: {
+-                let mut kinds = [0; 9];
++                let mut kinds = [0; 10];
+                 for thread in self.threads.values().filter(|t| t.faulting) {
+                     if let Wait::Call { parcel, .. } = &thread.wait {
+-                        kinds[(parcel.label as usize).min(8)] += 1;
++                        kinds[parcel.label as usize] += 1;
+                     }
+                 }
+                 kinds
+@@ -789,7 +789,7 @@ impl Model {
+             ensure(limits, "29: message or range of a waiting thread")?;
+             let fault = match &thread.wait {
+                 Wait::Call { parcel, .. } => {
+-                    let kind = (1..=8).contains(&parcel.label);
++                    let kind = FaultKind::from_raw(parcel.label).is_some();
+                     kind && parcel.words.len() == FAULT_WORDS && parcel.caps.is_empty()
+                 }
+                 Wait::Reply(_) => true,
+diff --git a/model/src/check/debug.rs b/model/src/check/debug.rs
+index 7facd2f..d509aa7 100644
+--- a/model/src/check/debug.rs
++++ b/model/src/check/debug.rs
+@@ -20,8 +20,7 @@ fn ring_holds(ring: &[TraceEntry], next: u64, entries: u64) -> bool {
+                 && entry.seq + entries >= next
+                 && (entry.seq - 1) % entries == index as u64)
+     });
+-    let last = next == 1 || ring[((next - 2) % entries) as usize].seq == next - 1;
+-    next >= 1 && placed && last
++    next >= 1 && placed && (next == 1 || ring[((next - 2) % entries) as usize].seq == next - 1)
+ }
+ 
+ impl Model {
+diff --git a/model/src/check/node.rs b/model/src/check/node.rs
+index b9e5aa1..e3c5256 100644
+--- a/model/src/check/node.rs
++++ b/model/src/check/node.rs
+@@ -197,12 +197,12 @@ impl Model {
+                     .is_some_and(|c| matches!(c.record, Record::Unmapping(_)));
+                 ensure(unmapping, "TLB: the record of a request is not unmapping")?;
+             }
+-            if let Some(thread) = request.waiter
+-                && let Some(t) = self.threads.get(&thread)
+-            {
+-                let waits = t.wait == Wait::Cores(requester) || t.wait == Wait::None;
+-                ensure(waits, "TLB: the thread of a request waits for another")?;
+-            }
++            let waits = request.waiter.is_none_or(|thread| {
++                self.threads
++                    .get(&thread)
++                    .is_some_and(|t| t.wait == Wait::Cores(requester))
++            });
++            ensure(waits, "TLB: the thread of a request waits for another")?;
+             let panicked = self.table.beacons[self.node as usize].panic.is_some();
+             ensure(
+                 panicked
+diff --git a/model/src/check/tasks.rs b/model/src/check/tasks.rs
+index 4371271..648ad9f 100644
+--- a/model/src/check/tasks.rs
++++ b/model/src/check/tasks.rs
+@@ -2,8 +2,8 @@
+ 
+ use super::{Check, ensure};
+ use crate::{IrqState, Model};
++use dodos_abi::Marks;
+ use dodos_abi::x86_64::{IRQ_VECTOR_FIRST, IRQ_VECTOR_LAST};
+-use dodos_abi::{Marks, TaskId};
+ use std::collections::BTreeSet;
+ 
+ impl Model {
+@@ -29,7 +29,6 @@ impl Model {
+             let once = task.threads.iter().collect::<BTreeSet<_>>().len() == task.threads.len();
+             ensure(attached && once, "48: threads of a task")?;
+         }
+-        ensure(!ids.contains(&TaskId::NONE.raw()), "49: task identifier")?;
+         for (&id, thread) in &self.threads {
+             let listed = thread.task.is_none_or(|task| {
+                 self.tasks
+@@ -52,7 +51,7 @@ impl Model {
+                 "50: running thread of a revoked task",
+             )?;
+         }
+-        ensure(true, "50: running thread of a revoked task")
++        Ok(())
+     }
+ 
+     /// Interrupts:
+diff --git a/model/src/check/tests.rs b/model/src/check/tests.rs
+index b50aa09..c11988e 100644
+--- a/model/src/check/tests.rs
++++ b/model/src/check/tests.rs
+@@ -1621,17 +1621,12 @@ fn with_device(m: &mut Model) -> (ObjId, ObjId) {
+         iospace: own(60),
+         device: 0x10,
+     };
+-    m.apply(boot, attach).unwrap();
+     // The device enters the header at the answer done of its attach, which
+     // the node, the holder of the unit's role, serves at a step (D-139).
++    m.apply_settled(boot, attach).unwrap();
+     let iospace = object(m, 60);
+-    for _ in 0..4 {
+-        if !m.iospaces[&iospace].is_empty() {
+-            break;
+-        }
+-        m.unit_step();
+-    }
+     assert!(!m.iospaces[&iospace].is_empty(), "the attach is answered");
++    assert_eq!(m.check(), Ok(()), "the device attached");
+     (iospace, object(m, 18))
+ }
+ 
+@@ -2564,13 +2559,10 @@ fn a_use_entry_that_counts_leaves_its_node_does_not_hold_is_reported() {
+     assert_eq!(broken, "58: leaves of a use entry");
+ }
+ 
+-/// 88: the identifier word of an attached device names its node.
++/// 88: an identifier word taken by the node names a device attached.
+ #[test]
+-fn an_attached_device_whose_identifier_word_is_not_its_nodes_is_reported() {
++fn an_identifier_word_taken_with_no_device_attached_is_reported() {
+     let broken = spoiled(|m, _| {
+-        m.table
+-            .identifiers
+-            .insert(4, Ownership::free(Owner::Unclaimed).raw());
+         let taken = Ownership::taken(Owner::Node(0), m.table.generation(0)).raw();
+         m.table.identifiers.insert(7, taken);
+     });
+@@ -2823,3 +2815,129 @@ fn translations_that_overlap_are_reported() {
+     live(&mut model.caps, frame_cap).record = Record::Mapping(mapping);
+     assert_eq!(model.check(), Err("35: translations that overlap"));
+ }
++
++// ver-D
++
++#[test]
++fn ver_d_a_block_of_no_entry_is_reported() {
++    let broken = spoiled(|m, _| {
++        let u = m
++            .untypeds
++            .values_mut()
++            .find(|u| matches!(u.block, Some(crate::Block::Entry(_))))
++            .expect("the device block");
++        u.block = Some(crate::Block::Entry(usize::MAX));
++    });
++    assert_eq!(broken, "54: block of no entry");
++}
++
++#[test]
++fn ver_d_an_attach_word_with_no_identifier_word_is_reported() {
++    let broken = spoiled(|m, _| {
++        let word = dodos_abi::AttachWord::new(dodos_abi::AttachState::Pinned, 0x1000).unwrap();
++        m.table.attach.insert(5, word.raw());
++    });
++    assert_eq!(
++        broken,
++        "88: an attach word with no identifier word or root beside it"
++    );
++}
++
++#[test]
++fn ver_d_probe_outcome_on_kinds_7_and_8() {
++    for kind in [FaultKind::NoAddressSpace, FaultKind::NoContext] {
++        println!("VERPROBE 16 {kind:?}: {}", outcome_on_a_fault(kind, 0));
++    }
++}
++
++#[test]
++fn ver_d_probe_with_device_leaves_a_valid_state() {
++    let mut m = state();
++    let _ = with_device(&mut m);
++    println!("VERPROBE with_device then check: {:?}", m.check());
++}
++
++#[test]
++fn ver_d_an_attached_device_whose_identifier_word_is_another_nodes_is_reported() {
++    let broken = spoiled(|m, _| {
++        let boot = object(m, START_SLOT_THREAD);
++        let own = SlotAddr::own;
++        let retype = Syscall::UntypedRetype {
++            untyped: own(UNTYPED),
++            kind: ObjectKind::IoSpace,
++            size: 0,
++            page: 0,
++            memory: 0,
++            destination: own(60),
++        };
++        while m.apply(boot, retype.clone()) == Err(Error::Again) {}
++        let attach = Syscall::IoSpaceAttach {
++            iommu: own(18),
++            iospace: own(60),
++            device: 0x10,
++        };
++        let _ = m.apply_settled(boot, attach);
++        assert_eq!(m.check(), Ok(()), "the device attached");
++        let iommu = object(m, 18);
++        assert!(m.iommus[&iommu].attached.contains_key(&0x10));
++        let segment = u32::from(m.machine.iommus[m.iommus[&iommu].unit].segment);
++        let other = Ownership::taken(Owner::Node(1), 1).raw();
++        m.table.identifiers.insert(segment << 16 | 0x10, other);
++    });
++    assert_eq!(broken, "88: identifier words and attached devices");
++}
++
++/// DeepSeek 5: the tables rule 37 counts (its own formula) are those of
++/// `memory::tables`, and its iospace levels those of `memory::io_levels`,
++/// on every geometry `Geometry::valid` accepts.
++#[test]
++fn ver_d_rule_37_agrees_with_memory_tables_on_every_valid_geometry() {
++    use dodos_abi::{Geometry, PageSize};
++    let mut geometries = 0;
++    for s0 in 12u8..=32 {
++        let per = s0 - 3;
++        for levels in 1..=8u32 {
++            for n in 2..=3usize {
++                let mut page_shift = [0u8; 4];
++                for (i, shift) in page_shift.iter_mut().enumerate().take(n) {
++                    *shift = s0 + per * i as u8;
++                }
++                let mut g = Geometry {
++                    page_shift,
++                    entries: 1 << per,
++                    levels,
++                    user_end: 0,
++                };
++                g.user_end = g.chunk();
++                if !g.valid() {
++                    continue;
++                }
++                geometries += 1;
++                let span = |k: u32| u128::from(g.page()) * u128::from(g.entries).pow(k);
++                for size in PageSize::ALL.into_iter().filter(|&s| g.bytes(s).is_some()) {
++                    let bytes = u128::from(g.bytes(size).unwrap());
++                    let top = 1u128 << g.address_bits().min(63);
++                    for at in [0, bytes, 3 * bytes, top / 2 - bytes, top - bytes] {
++                        let at = at as u64;
++                        let mut hooked = BTreeSet::new();
++                        for k in (1..levels).filter(|&k| span(k) > bytes) {
++                            hooked.insert((k, u128::from(at) / span(k)));
++                        }
++                        let tables: BTreeSet<(u32, u128)> =
++                            crate::memory::tables([(at, size)].into_iter(), levels, g)
++                                .into_iter()
++                                .map(|(k, key)| (k, u128::from(key)))
++                                .collect();
++                        assert_eq!(hooked, tables, "{g:?} {size:?} {at:#x}");
++                    }
++                }
++                for width in u32::from(s0) + 1..=64 {
++                    let check = (1..=64).find(|&k| span(k) >= 1u128 << width).unwrap_or(64);
++                    assert_eq!(check, crate::memory::io_levels(g, width), "{g:?} {width}");
++                }
++            }
++        }
++    }
++    println!("VERPROBE geometries: {geometries}");
++    assert!(geometries > 3);
++}
+diff --git a/model/src/scenarios/checker.rs b/model/src/scenarios/checker.rs
+index bc489bc..e2392e8 100644
+--- a/model/src/scenarios/checker.rs
++++ b/model/src/scenarios/checker.rs
+@@ -10,7 +10,7 @@ use crate::cores::{Completes, Flush, Request};
+ use crate::locks::{Cost, LockId, Step};
+ use crate::nodes::HwAction;
+ use crate::table::{FenceStep, GrantState};
+-use dodos_abi::{CHECK_MUL, CoreWord, Member, RoleWord};
++use dodos_abi::{CHECK_MUL, CoreWord, RoleWord};
+ 
+ /// A node of two cores alone.
+ fn node2() -> N {
+@@ -518,7 +518,7 @@ fn a_word_marked_before_its_park_request_inside_the_event_is_reported() {
+ }
+ 
+ #[test]
+-fn a_grant_freed_while_its_holder_translates_to_it_is_reported() {
++fn a_use_entry_with_leaves_and_no_grant_is_reported_by_the_holders_58() {
+     let mut m = S::two();
+     // A use entry of node 1 that counts a leaf under a grant of node 0 that
+     // node 0 no longer has.
+@@ -539,12 +539,7 @@ fn a_grant_freed_while_its_holder_translates_to_it_is_reported() {
+         );
+     });
+     let report = m.sys.check().expect_err("spoiled");
+-    assert!(
+-        report.ends_with("G6: a grant freed while its holder translates to it")
+-            || report.contains("58"),
+-        "{report}"
+-    );
+-    let _ = Member::new;
++    assert_eq!(report, "node 1: 58: leaves of a use entry");
+ }
+ 
+ #[test]
+@@ -587,3 +582,182 @@ fn a_translation_under_no_grant_is_reported() {
+     let report = m.sys.check().expect_err("spoiled");
+     assert_eq!(report, "node 1: 58: translation under no grant");
+ }
++
++// ver-D: one spoiled state for each check no test made fail.
++
++fn ver_d_in_use(k: &mut N, r: Request) {
++    k.m.cores[0].request = Some(r);
++    k.m.cores[0].request_state = crate::cores::RequestState::InUse;
++    k.m.cores[1].pending.insert(0);
++}
++
++#[test]
++fn ver_d_a_state_word_in_use_with_no_request_is_reported() {
++    let mut k = node2();
++    k.m.cores[0].request_state = crate::cores::RequestState::InUse;
++    reported(&k, "TLB: the state word of a request");
++}
++
++#[test]
++fn ver_d_a_barrier_that_invalidates_is_reported() {
++    let mut k = node2();
++    let mut r = request(0b10, 0, 0);
++    r.completes = Completes::Barrier(k.m.kernel_epoch);
++    ver_d_in_use(&mut k, r);
++    reported(
++        &k,
++        "TLB: a barrier that invalidates, or an invalidation that is a barrier",
++    );
++}
++
++#[test]
++fn ver_d_a_barrier_beyond_the_kernel_epoch_is_reported() {
++    let mut k = node2();
++    let mut r = request(0b10, 0, 0);
++    r.flush = Flush::Nothing;
++    r.completes = Completes::Barrier(k.m.kernel_epoch + 1);
++    ver_d_in_use(&mut k, r);
++    reported(&k, "epoch: a barrier beyond the kernel epoch");
++}
++
++#[test]
++fn ver_d_an_epoch_raised_by_two_is_reported() {
++    let (mut k, untyped) = super::pass20::ready_untyped(crate::Arch::X86_64, 2);
++    let e = k.m.kernel_epoch;
++    k.m.kernel_epoch = e + 3;
++    k.m.locks.steps = vec![
++        Step::Epoch(e + 1),
++        Step::Ready(untyped),
++        Step::Epoch(e + 3),
++        Step::Ready(untyped),
++    ];
++    k.m.untypeds.get_mut(&untyped).unwrap().ready = Some(e + 3);
++    reported(&k, "epoch: raised by more than one at a time");
++}
++
++#[test]
++fn ver_d_an_epoch_that_is_not_the_last_raise_is_reported() {
++    let (mut k, untyped) = super::pass20::ready_untyped(crate::Arch::X86_64, 2);
++    let e = k.m.kernel_epoch;
++    k.m.kernel_epoch = e + 2;
++    k.m.locks.steps = vec![Step::Epoch(e + 1), Step::Ready(untyped)];
++    k.m.untypeds.get_mut(&untyped).unwrap().ready = Some(e + 1);
++    reported(&k, "epoch: the node's epoch is not its last raise");
++}
++
++#[test]
++fn ver_d_a_word_6_beyond_the_kernel_epoch_is_reported() {
++    let (mut k, untyped) = super::pass20::ready_untyped(crate::Arch::X86_64, 2);
++    let e = k.m.kernel_epoch;
++    k.m.untypeds.get_mut(&untyped).unwrap().ready = Some(e + 1);
++    reported(
++        &k,
++        "epoch: word 6 of an untyped's root slot is not the epoch its watermark became ready at",
++    );
++}
++
++#[test]
++fn ver_d_a_ready_watermark_under_a_live_object_is_reported() {
++    let mut k = node2();
++    let e = k.m.kernel_epoch.max(1);
++    k.m.kernel_epoch = e;
++    let untyped =
++        k.m.untypeds
++            .iter()
++            .find(|(_, u)| u.live > 0)
++            .map(|(&id, _)| id)
++            .unwrap();
++    k.m.untypeds.get_mut(&untyped).unwrap().ready = Some(e);
++    reported(&k, "18: a watermark ready to return under a live object");
++}
++
++#[test]
++fn ver_d_probe_more_sends_than_sends_per_peer() {
++    let mut k = node2();
++    let peers = k.m.peers.len();
++    println!(
++        "VERPROBE credits peers={peers} len={}",
++        k.m.peers[0].credits.len()
++    );
++    let mut c = k.m.peers[0].credits.clone();
++    c.push(None);
++    k.m.peers[0].credits = c;
++    println!("VERPROBE credits longer: {:?}", k.m.check());
++}
++
++#[test]
++fn ver_d_probe_a_device_leaf_count_below_its_leaves() {
++    let mut m = S::two();
++    let node = m.sys.node(0);
++    let index = (0..node.device_count())
++        .find(|&i| node.device_entry(i).base() == 2 << 20)
++        .expect("the device range");
++    m.ok(
++        0,
++        Syscall::MemoryTake {
++            control: s(dodos_abi::START_SLOT_MEMORY_CONTROL),
++            kind: 1,
++            place: index as u64,
++            size: 0,
++            destination: s(220),
++        },
++    );
++    m.ok(
++        0,
++        Syscall::UntypedRetype {
++            untyped: s(220),
++            kind: ObjectKind::Frame,
++            size: 1,
++            page: 0,
++            memory: 1,
++            destination: s(221),
++        },
++    );
++    m.ok(
++        0,
++        Syscall::ASpaceMap(crate::Map {
++            space: s(dodos_abi::START_SLOT_ASPACE),
++            frame: s(221),
++            untyped: SlotAddr::NONE,
++            address: 1 << 30,
++            first: 0,
++            count: 1,
++            rights: Rights::READ.bits(),
++        }),
++    );
++    println!("VERPROBE G4 before: {:?}", m.sys.check());
++    m.sys
++        .edit_table(|t| std::sync::Arc::make_mut(&mut t.device_leaves)[index] = 0);
++    println!("VERPROBE G4 after: {:?}", m.sys.check());
++}
++
++#[test]
++fn ver_d_a_request_whose_thread_waits_for_nothing_is_reported() {
++    let mut k = node2();
++    let thread = idle_thread(&mut k);
++    let mut r = request(0b10, 0, 0);
++    r.waiter = Some(thread);
++    k.m.cores[0].request = Some(r);
++    k.m.cores[0].request_state = crate::cores::RequestState::InUse;
++    k.m.cores[1].pending.insert(0);
++    reported(&k, "TLB: the thread of a request waits for another");
++}
++
++#[test]
++fn ver_d_a_request_whose_thread_is_gone_is_reported() {
++    let mut k = node2();
++    let mut r = request(0b10, 0, 0);
++    r.waiter = Some(crate::ObjId(u32::MAX - 7));
++    k.m.cores[0].request = Some(r);
++    k.m.cores[0].request_state = crate::cores::RequestState::InUse;
++    k.m.cores[1].pending.insert(0);
++    reported(&k, "TLB: the thread of a request waits for another");
++}
++
++#[test]
++fn ver_d_a_ring_whose_next_sequence_is_0_is_reported() {
++    let mut k = node2();
++    let n = k.m.cores[0].number as usize;
++    std::sync::Arc::make_mut(&mut k.m.table.crash).areas[n].next_user = 0;
++    reported(&k, "88: user ring");
++}
+diff --git a/model/tests/faults.rs b/model/tests/faults.rs
+index 5ed3d1c..3e3e312 100644
+--- a/model/tests/faults.rs
++++ b/model/tests/faults.rs
+@@ -620,3 +620,26 @@ fn resuming_a_thread_that_runs_keeps_nothing_to_clear() {
+     k.ok(Syscall::ThreadSuspend(s(40)));
+     assert_eq!(k.record(40)[0], 0);
+ }
++
++#[test]
++fn ver_d_kind_9_fault_waiting_on_its_endpoint() {
++    let mut k = K::new();
++    let thread = k.running(40, EP);
++    k.ok(Syscall::ThreadSuspend(s(40)));
++    let mut block = k.regs(40);
++    block[dodos_abi::x86_64::REG_DR0] = 0x1000;
++    block[dodos_abi::x86_64::REG_DR7] = 1;
++    k.ok(Syscall::ThreadWriteRegs {
++        thread: s(40),
++        block,
++    });
++    k.ok(Syscall::ThreadResume(s(40)));
++    k.m.fault(thread, FaultKind::HardwareBreakpoint, [1, 1, 0xFFFF_0FF1]);
++    assert_eq!(k.m.census().faulting, 1);
++    assert_eq!(k.m.check(), Ok(()));
++    assert_eq!(
++        k.m.census().fault_kinds[8],
++        0,
++        "kind 9 counted as no context"
++    );
++}

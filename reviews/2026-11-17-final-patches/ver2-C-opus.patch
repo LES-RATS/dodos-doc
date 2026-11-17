@@ -1,0 +1,671 @@
+diff --git a/model/src/scenarios/mod.rs b/model/src/scenarios/mod.rs
+index 5fc07f3..9a8e84e 100644
+--- a/model/src/scenarios/mod.rs
++++ b/model/src/scenarios/mod.rs
+@@ -343,3 +343,5 @@ impl S {
+             .object_at_start(dodos_abi::START_SLOT_THREAD);
+     }
+ }
++
++mod ver2c;
+diff --git a/model/src/scenarios/ver2c.rs b/model/src/scenarios/ver2c.rs
+new file mode 100644
+index 0000000..61a8fab
+--- /dev/null
++++ b/model/src/scenarios/ver2c.rs
+@@ -0,0 +1,655 @@
++//! My own reproductions of the attacks of the Lot C report, written from
++//! the report's findings and the code, not copied from the author's file.
++
++use super::*;
++use crate::boot::Refusal;
++use crate::rings::{Body, UnitOp};
++use crate::{Map, Message, Range, Transfer};
++use dodos_abi::{Header, NodeMessage, RingHeader, START_SLOT_ASPACE, START_SLOT_MAILBOX};
++
++const REPLY: u32 = 100;
++const OBJ: u32 = 101;
++const GOT: u32 = 110;
++
++fn recv(first: u32) -> Syscall {
++    Syscall::Recv {
++        endpoint: s(START_SLOT_MAILBOX),
++        reply: s(REPLY),
++        range: Range {
++            first: s(first),
++            count: 4,
++        },
++        wait: 0,
++    }
++}
++
++fn rights() -> u32 {
++    Rights::READ
++        .union(Rights::WRITE)
++        .union(Rights::SEND)
++        .union(Rights::DERIVE)
++        .bits()
++}
++
++/// A message written into ring `from` -> `to`, with a header that names
++/// `sender`: what a hostile kernel of node `from` writes in its own ring.
++fn forged(
++    m: &S,
++    kind: NodeMessage,
++    sender: u16,
++    to: u16,
++    credit: Option<(u8, u32)>,
++    body: Body,
++) -> crate::rings::Message {
++    let t = m.sys.canonical();
++    let header = RingHeader::new(
++        kind,
++        body.entries() as u8,
++        (sender, t.generation(sender)),
++        t.generation(to),
++        credit,
++    );
++    crate::rings::Message { header, body }
++}
++
++// boot.rs.
++
++/// A writable segment of the first service longer than the first block of
++/// node 0's floor: the start-up panics instead of refusing.
++#[test]
++fn v1_a_writable_segment_larger_than_the_first_untyped_panics() {
++    let mut machine = Machine::example();
++    let chunk = machine.geometry.chunk();
++    println!(
++        "V1: floor {} bytes = {} chunks; the writable segment becomes {} chunks",
++        machine.floors.floor_node,
++        machine.floors.floor_node / chunk,
++        8
++    );
++    machine.segments[1].len = 8 * chunk;
++    let outcome = std::panic::catch_unwind(|| Model::boot(&machine).map(|_| ()).map_err(|r| r));
++    match outcome {
++        Ok(Ok(())) => println!("V1: boot returned Ok"),
++        Ok(Err(refusal)) => println!("V1: boot refused {refusal:?}"),
++        Err(_) => println!("V1: boot panicked"),
++    }
++    assert!(outcome.is_err(), "the start-up did not panic");
++}
++
++/// A `BootNode` whose window times 64 overflows the u64 of the record.
++#[test]
++fn v2a_a_boot_node_window_that_overflows_panics() {
++    let mut machine = machine(Arch::X86_64, 2, &[&[0], &[1]]);
++    // A window of 2^58 names cores from 2^63: no layout of this machine
++    // can produce it, and the multiplication is done before the check.
++    machine.boot_nodes = Some((2, vec![(1u64 << 58, 1), (0, 0b11)]));
++    let outcome = std::panic::catch_unwind(|| Model::boot(&machine).map(|_| ()));
++    match outcome {
++        Ok(Ok(())) => println!("V2a: boot accepted the record"),
++        Ok(Err(refusal)) => println!("V2a: boot refused {refusal:?}"),
++        Err(_) => println!("V2a: boot panicked"),
++    }
++    assert!(outcome.is_err(), "the start-up did not panic");
++}
++
++/// A core whose kind names no record of the kind list.
++#[test]
++fn v2b_a_core_of_an_unknown_kind_panics() {
++    let mut machine = Machine::example();
++    machine.cores[1].kind = 7;
++    let outcome = std::panic::catch_unwind(|| Model::boot(&machine).map(|_| ()));
++    match outcome {
++        Ok(Ok(())) => println!("V2b: boot accepted the core"),
++        Ok(Err(refusal)) => println!("V2b: boot refused {refusal:?}"),
++        Err(_) => println!("V2b: boot panicked"),
++    }
++    assert!(outcome.is_err(), "the start-up did not panic");
++}
++
++/// MAXPHYADDR below the memory map: the ownership words are sized from the
++/// width and then indexed by the chunks of ordinary memory.
++#[test]
++fn v2c_phys_bits_below_the_memory_map_panics() {
++    let mut machine = Machine::example();
++    machine.phys_bits = machine.geometry.chunk_shift();
++    println!(
++        "V2c: MAXPHYADDR {} bits = the chunk shift {} bits: one ownership word",
++        machine.phys_bits,
++        machine.geometry.chunk_shift()
++    );
++    let outcome = std::panic::catch_unwind(|| Model::boot(&machine).map(|_| ()));
++    match outcome {
++        Ok(Ok(())) => println!("V2c: boot accepted the map"),
++        Ok(Err(refusal)) => println!("V2c: boot refused {refusal:?}"),
++        Err(_) => println!("V2c: boot panicked"),
++    }
++    assert!(outcome.is_err(), "the start-up did not panic");
++    let _ = Refusal::Floors;
++}
++
++/// A crash area off its chunk boundary: the start-up keeps a large page
++/// from it anyway, and the checker accepts a frame the size of a chunk at
++/// an address that is not on a chunk boundary.
++#[test]
++fn v3_a_crash_area_off_its_chunk_boundary_is_accepted() {
++    let mut machine = Machine::example();
++    let (page, large1) = (
++        machine.geometry.page(),
++        machine.geometry.bytes(PageSize::Large1).expect("a large page"),
++    );
++    machine.crash.0 += page;
++    let base = machine.crash.0;
++    let outcome = std::panic::catch_unwind(|| Model::boot(&machine));
++    let Ok(Ok((model, _))) = outcome else {
++        println!("V3: the start-up did not accept it: {outcome:?}");
++        panic!("the start-up refused the boot image");
++    };
++    let kept: Vec<_> = model
++        .frames
++        .values()
++        .filter(|f| f.page == PageSize::Large1 && f.base == base)
++        .collect();
++    println!(
++        "V3: boot accepted it; check {:?}; frames of the crash base {base:#x}: {}",
++        model.check(),
++        kept.len()
++    );
++    println!(
++        "V3: aligned on its page size: {}; base % {large1} = {}",
++        base.is_multiple_of(large1),
++        base % large1
++    );
++    let _ = Refusal::Floors;
++}
++
++// grants.rs and rings.rs.
++
++/// Node 1 grants node 0 a frame, then writes another node's floor into the
++/// `Send` it left in its own ring: node 0 maps node 2's memory, and the
++/// checker accepts the mapping.
++#[test]
++fn v4_the_granting_node_writes_the_frame_the_holder_maps() {
++    let mut m = S::on(&machine(Arch::X86_64, 3, &[&[0], &[1], &[2]]));
++    let reply = m.retype(0, ObjectKind::Reply, 0, REPLY);
++    m.ok(0, reply);
++    let frame = m.retype(1, ObjectKind::Frame, 1, OBJ);
++    m.ok(1, frame);
++    assert_eq!(m.call(0, recv(GOT)), WAITS);
++    let message = Message {
++        label: 7,
++        flags: 0,
++        words: vec![7],
++        caps: vec![Transfer::Derive(s(OBJ), rights())],
++        marks: 0,
++    };
++    let call = Syscall::NodeSend {
++        node: node_cap(0),
++        message,
++        doorbell: SlotAddr::NONE,
++    };
++    assert_eq!(m.call(1, call), WAITS);
++    // The floor of node 2, which node 1 reads in the fixed part of the
++    // machine table, as every kernel does.
++    let victim = m
++        .sys
++        .node(2)
++        .untypeds
++        .values()
++        .map(|u| u.base)
++        .min()
++        .expect("a floor");
++    let chunk = m.sys.node(2).machine.geometry.chunk();
++    println!("V4: node 2's floor starts at {victim:#x}, chunks of {chunk:#x}");
++    let pages = chunk / m.sys.node(2).machine.geometry.page();
++    // The granting node rewrites the frame of its own `Send` in its own
++    // ring: plain stores into memory only node 1's kernel writes.
++    m.sys.edit_table(move |t| {
++        for pair in std::sync::Arc::make_mut(&mut t.rings)[1].iter_mut() {
++            for entry in pair.user.entries.iter_mut().flatten() {
++                if let crate::table::RingEntry::Message(msg) = entry
++                    && let Body::Send { grants, .. } = &mut msg.body
++                {
++                    grants[0].frame.base = victim;
++                    grants[0].frame.pages = pages;
++                    grants[0].rights = Rights::ALL;
++                }
++            }
++        }
++    });
++    m.settle();
++    assert!(matches!(m.woken(0), Some(Ok(Output::Message(_)))));
++    let got = m.sys.node(0).object_at(m.t[0], s(GOT)).expect("the frame");
++    let placed = m.sys.node(0).frames[&got];
++    println!(
++        "V4: node 0 holds a remote frame at {:#x}, {} pages",
++        placed.base, placed.pages
++    );
++    let map = Syscall::ASpaceMap(Map {
++        space: s(START_SLOT_ASPACE),
++        frame: s(GOT),
++        untyped: SlotAddr::NONE,
++        address: 1 << 30,
++        first: 0,
++        count: 1,
++        rights: Rights::READ.union(Rights::WRITE).bits(),
++    });
++    let outcome = m.call(0, map);
++    println!("V4: node 0 maps it: {outcome:?}");
++    println!("V4: check after the map: {:?}", m.sys.check());
++    assert_eq!(placed.base, victim, "node 1 chose another node's frame");
++    assert_eq!(outcome, DONE);
++}
++
++/// Three nodes; node 0 grants node 1 a frame and node 1 holds the remote
++/// capability. Node 2 writes a `Release` for that grant in its own ring to
++/// node 0, naming node 1 as its sender: node 0 frees node 1's grant.
++#[test]
++fn v5a_a_release_forged_by_a_third_node_frees_the_grantee_grant() {
++    let mut m = S::on(&machine(Arch::X86_64, 3, &[&[0], &[1], &[2]]));
++    let reply = m.retype(0, ObjectKind::Reply, 0, REPLY);
++    m.ok(0, reply);
++    let reply = m.retype(1, ObjectKind::Reply, 0, REPLY);
++    m.ok(1, reply);
++    let frame = m.retype(0, ObjectKind::Frame, 1, OBJ);
++    m.ok(0, frame);
++    assert_eq!(m.call(1, recv(GOT)), WAITS);
++    let message = Message {
++        label: 7,
++        flags: 0,
++        words: vec![7],
++        caps: vec![Transfer::Derive(s(OBJ), rights())],
++        marks: 0,
++    };
++    let call = Syscall::NodeSend {
++        node: node_cap(1),
++        message,
++        doorbell: SlotAddr::NONE,
++    };
++    assert_eq!(m.call(0, call), WAITS);
++    m.settle();
++    let grant = m.sys.node(0).grant_entries()[0].0;
++    let serial = m.sys.canonical().grants[0][&grant].serial;
++    let got = m.sys.node(1).object_at(m.t[1], s(GOT)).expect("the frame");
++    let remote = m.sys.node(1).remotes[&got];
++    assert!(m.sys.node(1).valid(&remote));
++    println!("V5a: grant {grant} serial {serial} is live; node 1's frame is valid");
++    let before = m.sys.node(0).refused.0;
++    let release = forged(&m, NodeMessage::Release, 1, 0, None, Body::Release { grant, serial });
++    m.sys.inject(2, 0, release);
++    m.run(20 * MS);
++    println!(
++        "V5a: node 0 refused {} of ring 2 -> 0's messages; grant after: {:?}; node 1's frame valid: {}",
++        m.sys.node(0).refused.0 - before,
++        m.sys.canonical().grants[0].get(&grant).is_some(),
++        m.sys.node(1).valid(&remote)
++    );
++    assert!(
++        !m.sys.canonical().grants[0].contains_key(&grant),
++        "the forged release was refused"
++    );
++}
++
++/// The same forgery while node 1 has the frame mapped: the grant is freed
++/// and the translation stays, so node 0 may give the chunk out again.
++#[test]
++fn v5a2_a_release_forged_while_the_grantee_maps_frees_the_grant_under_the_mapping() {
++    let mut m = S::on(&machine(Arch::X86_64, 3, &[&[0], &[1], &[2]]));
++    let reply = m.retype(0, ObjectKind::Reply, 0, REPLY);
++    m.ok(0, reply);
++    let reply = m.retype(1, ObjectKind::Reply, 0, REPLY);
++    m.ok(1, reply);
++    let frame = m.retype(0, ObjectKind::Frame, 1, OBJ);
++    m.ok(0, frame);
++    assert_eq!(m.call(1, recv(GOT)), WAITS);
++    let message = Message {
++        label: 7,
++        flags: 0,
++        words: vec![7],
++        caps: vec![Transfer::Derive(s(OBJ), rights())],
++        marks: 0,
++    };
++    let call = Syscall::NodeSend {
++        node: node_cap(1),
++        message,
++        doorbell: SlotAddr::NONE,
++    };
++    assert_eq!(m.call(0, call), WAITS);
++    m.settle();
++    let grant = m.sys.node(0).grant_entries()[0].0;
++    let serial = m.sys.canonical().grants[0][&grant].serial;
++    let space = m
++        .sys
++        .node(1)
++        .object_at(m.t[1], s(START_SLOT_ASPACE))
++        .expect("an aspace");
++    let before = m.sys.node(1).aspaces[&space].translations.len();
++    let map = Syscall::ASpaceMap(Map {
++        space: s(START_SLOT_ASPACE),
++        frame: s(GOT),
++        untyped: SlotAddr::NONE,
++        address: 1 << 30,
++        first: 0,
++        count: 1,
++        rights: Rights::READ.union(Rights::WRITE).bits(),
++    });
++    assert_eq!(m.call(1, map), DONE, "node 1 maps the granted page");
++    let got = m.sys.node(1).object_at(m.t[1], s(GOT)).expect("the frame");
++    let placed = m.sys.node(1).frames[&got];
++    let leaves = m.sys.canonical().uses[1][&m.sys.node(1).remotes[&got].use_entry].leaves;
++    println!(
++        "V5a2: node 1 maps node 0's frame at {:#x}; its use entry counts {} leaves",
++        placed.base, leaves
++    );
++    let release = forged(&m, NodeMessage::Release, 1, 0, None, Body::Release { grant, serial });
++    m.sys.inject(2, 0, release);
++    // Events go by without the check, so that the state it forbids can be
++    // seen before it fails.
++    let to = m.sys.now() + 20 * MS;
++    while m.sys.now() < to {
++        m.sys.advance((m.sys.now() + 100_000).min(to));
++    }
++    let space = m.sys.node(1).object_at(m.t[1], s(START_SLOT_ASPACE)).expect("an aspace");
++    let mapping = m.sys.node(1).aspaces[&space].translations.len();
++    let check = m.sys.check();
++    println!(
++        "V5a2: grant live: {}; node 1's translations: {mapping}; check {check:?}",
++        m.sys.canonical().grants[0].contains_key(&grant),
++    );
++    assert!(
++        !m.sys.canonical().grants[0].contains_key(&grant),
++        "the forged release was refused"
++    );
++    assert_eq!(mapping, before + 1, "node 1's mapping went with the grant");
++    assert!(check.is_err(), "the checker accepts a translation under no grant");
++}
++
++/// Node 2 writes a `Send` in its own ring to node 0, naming node 1 in its
++/// header and node 1's start-up task in its stamp: node 0's receiver is
++/// told the message comes from node 1's task.
++#[test]
++fn v5b_a_send_forged_by_a_third_node_carries_another_nodes_task() {
++    let mut m = S::on(&machine(Arch::X86_64, 3, &[&[0], &[1], &[2]]));
++    let reply = m.retype(0, ObjectKind::Reply, 0, REPLY);
++    m.ok(0, reply);
++    assert_eq!(m.call(0, recv(GOT)), WAITS);
++    let task = dodos_abi::TaskId::new(1, 1).raw();
++    let header = Header::new(7, 1, 0, 0).expect("a header");
++    let body = Body::Send {
++        header,
++        stamp: (task, 0),
++        grants: vec![],
++        words: vec![42],
++    };
++    let send = forged(&m, NodeMessage::Send, 1, 0, None, body);
++    let before = m.sys.node(0).refused.0;
++    m.sys.inject(2, 0, send);
++    m.run(20 * MS);
++    let woken = m.woken(0).cloned();
++    println!("V5b: node 0 refused {}; its receiver woke with {woken:?}", m.sys.node(0).refused.0 - before);
++    let Some(Ok(Output::Message(delivery))) = woken else {
++        panic!("the forged send was not delivered");
++    };
++    println!(
++        "V5b: the task {} names node {}",
++        delivery.received.task,
++        dodos_abi::TaskId::from_raw(delivery.received.task).node()
++    );
++    assert_eq!(delivery.received.task, task);
++}
++
++/// Node 0 attached its device through node 1, the IOMMU role's holder.
++/// Node 2 writes a `UnitRequest` in its own ring to node 1 that detaches
++/// the device and names node 0 as the sender: node 1 clears node 0's
++/// context entry.
++#[test]
++fn v5c_a_detach_forged_in_another_nodes_name_clears_its_context_entry() {
++    use super::units::{DEVICE, IOMMU_ROLE, attached, three};
++    let mut m = three();
++    attached(&mut m, 0);
++    assert_eq!(m.sys.role(IOMMU_ROLE).holder(), 1);
++    let device = DEVICE as u16;
++    let unit = &m.sys.canonical().units[&IOMMU_ROLE];
++    let domain = unit.domains[&device];
++    let before = unit.entries.get(&device).copied();
++    println!("V5c: node 0's context entry before: {before:?}, domain {domain}");
++    let epoch = m.sys.role(IOMMU_ROLE).epoch();
++    let op = UnitOp::Detach {
++        device,
++        domain,
++        root: 0,
++    };
++    let body = Body::UnitRequest {
++        role: IOMMU_ROLE as u16,
++        epoch,
++        op,
++    };
++    let request = forged(&m, NodeMessage::UnitRequest, 0, 1, Some((5, 77)), body);
++    let refused = m.sys.node(1).refused.0;
++    m.sys.inject(2, 1, request);
++    m.run(30 * MS);
++    let after = m
++        .sys
++        .canonical()
++        .units[&IOMMU_ROLE]
++        .entries
++        .get(&device)
++        .copied();
++    println!(
++        "V5c: node 1 refused {} of ring 2 -> 1's messages; the context entry after: {after:?}",
++        m.sys.node(1).refused.0 - refused
++    );
++    assert_eq!(after, None, "the forged detach was refused");
++}
++
++/// Node 1 moves the producer index of its user ring to node 0 back below
++/// what node 0 has consumed: the resynchronisation wraps and the
++/// subtraction after it overflows.
++#[test]
++fn v6_a_producer_index_moved_back_overflows_the_receiver() {
++    let mut m = S::two();
++    for _ in 0..4 {
++        let body = Body::Signal {
++            grant: 3,
++            serial: 0,
++        };
++        let signal = forged(&m, NodeMessage::Signal, 1, 0, None, body);
++        m.sys.inject(1, 0, signal);
++        m.run(MS);
++    }
++    let consumed = m.sys.canonical().beacons[0].consumed[1].1;
++    println!("V6: node 0 has consumed {consumed} entries of ring 1 -> 0");
++    // The producer index is written by node 1 only, with plain stores.
++    m.sys
++        .edit_table(|t| std::sync::Arc::make_mut(&mut t.rings)[1][0].user.produced = 0);
++    let body = Body::Signal {
++        grant: 3,
++        serial: 0,
++    };
++    let signal = forged(&m, NodeMessage::Signal, 1, 0, None, body);
++    m.sys.inject(1, 0, signal);
++    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.sys.settle(100)));
++    println!("V6: node 0 served the ring: {outcome:?}");
++    assert!(outcome.is_err(), "the receiver did not panic");
++}
++
++/// Node 1 holds the unit roles and is killed; node 2 takes over and asks
++/// node 0. Node 0 answers every `ReportAsk` with a `Report` whose next key
++/// is the key asked, so the rebuild never ends.
++#[test]
++fn v7_a_report_whose_next_key_does_not_advance_stalls_the_rebuild() {
++    let mut m = super::units::three();
++    let kill = Syscall::NodeStop {
++        node: node_cap(1),
++        mode: dodos_abi::NODE_STOP_KILL,
++        core: 0,
++    };
++    m.ok(0, kill);
++    let (mut rewritten, mut fired, mut seen) = (0u64, 0u64, false);
++    let to = m.sys.now() + 200 * MS;
++    while m.sys.now() < to && fired < 4000 && m.sys.has(2) {
++        match m.sys.events().first() {
++            Some(&event) => m.sys.fire(event),
++            None => {
++                let next = m
++                    .sys
++                    .models()
++                    .filter_map(|(_, n)| n.next_timer())
++                    .map(|(at, _)| at)
++                    .min();
++                let Some(next) = next else { break };
++                m.sys.move_clock(next.max(m.sys.now() + 1).min(to));
++                continue;
++            }
++        }
++        // Node 0 writes, in its own ring to node 2, every `Report` with
++        // the key asked (0) as its next key.
++        m.sys.edit_table(|t| {
++            for entry in std::sync::Arc::make_mut(&mut t.rings)[0][2]
++                .kernel
++                .entries
++                .iter_mut()
++                .flatten()
++            {
++                if let crate::table::RingEntry::Message(msg) = entry
++                    && let Body::Report { next, .. } = &mut msg.body
++                    && *next != 0
++                {
++                    *next = 0;
++                    rewritten += 1;
++                }
++            }
++        });
++        fired += 1;
++        seen |= !m.sys.node(2).rebuilds.is_empty();
++        if fired % 500 == 0 {
++            assert_eq!(m.sys.check(), Ok(()));
++            println!(
++                "V7: {fired} events, {rewritten} reports rewritten, rebuilding {}, items {}",
++                !m.sys.node(2).rebuilds.is_empty(),
++                m.sys
++                    .node(2)
++                    .rebuilds
++                    .values()
++                    .map(|b| b.items.len())
++                    .sum::<usize>()
++            );
++        }
++    }
++    println!(
++        "V7: {fired} events, {rewritten} reports rewritten, node 2's IOMMU role {}, rebuilding {}",
++        m.sys.role(0).holder() == 2,
++        !m.sys.node(2).rebuilds.is_empty()
++    );
++    assert!(seen, "node 2 never rebuilt");
++    assert!(rewritten > 100, "the rebuild was not stalled");
++    assert!(
++        !m.sys.node(2).rebuilds.is_empty(),
++        "the rebuild ended despite the reports"
++    );
++    assert_eq!(m.sys.check(), Ok(()));
++}
++
++
++/// Node 0 (the asked node) writes its own `Report`s with the key asked as
++/// their next key, in its own ring to node 2; returns how many it rewrote.
++fn rewrite_reports(m: &mut S) -> u64 {
++    let mut n = 0u64;
++    m.sys.edit_table(|t| {
++        for entry in std::sync::Arc::make_mut(&mut t.rings)[0][2]
++            .kernel
++            .entries
++            .iter_mut()
++            .flatten()
++        {
++            if let crate::table::RingEntry::Message(msg) = entry
++                && let Body::Report { next, .. } = &mut msg.body
++                && *next != 0
++            {
++                *next = 0;
++                n += 1;
++            }
++        }
++    });
++    n
++}
++
++/// One event of the machine, or the clock moved to the next timer.
++fn step_one(m: &mut S, to: u64) -> bool {
++    match m.sys.events().first() {
++        Some(&event) => {
++            m.sys.fire(event);
++            true
++        }
++        None => match m
++            .sys
++            .models()
++            .filter_map(|(_, n)| n.next_timer())
++            .map(|(at, _)| at)
++            .min()
++        {
++            Some(next) => {
++                m.sys.move_clock(next.max(m.sys.now() + 1).min(to));
++                true
++            }
++            None => false,
++        },
++    }
++}
++
++/// While the rebuild never ends, a unit request of another node waits: the
++/// holder keeps it until the rebuild ends, and it never does.
++#[test]
++fn v7b_a_unit_request_waits_while_the_rebuild_never_ends() {
++    use super::units::{DEVICE, IOMMU_ROLE, IOSPACE, attach, three};
++    let mut m = three();
++    let kill = Syscall::NodeStop {
++        node: node_cap(1),
++        mode: dodos_abi::NODE_STOP_KILL,
++        core: 0,
++    };
++    m.ok(0, kill);
++    let to = m.sys.now() + 200 * MS;
++    let mut rewritten = 0u64;
++    for _ in 0..1200 {
++        if !step_one(&mut m, to) {
++            break;
++        }
++        rewritten += rewrite_reports(&mut m);
++    }
++    assert_eq!(m.sys.role(IOMMU_ROLE).holder(), 2);
++    assert!(!m.sys.node(2).rebuilds.is_empty(), "the rebuild ended");
++    println!("V7b: {rewritten} reports rewritten, the rebuild of node 2 runs");
++    // Node 0 asks the rebuilding holder for a device.
++    let iospace = m.retype(0, ObjectKind::IoSpace, 0, IOSPACE);
++    m.ok(0, iospace);
++    let call = attach(&m, 0, IOSPACE, DEVICE);
++    let outcome = m.call(0, call);
++    println!("V7b: node 0's attach: {outcome:?}");
++    assert_eq!(outcome, WAITS, "the request was not kept");
++    for _ in 0..800 {
++        if !step_one(&mut m, to) {
++            break;
++        }
++        rewritten += rewrite_reports(&mut m);
++    }
++    println!(
++        "V7b: {rewritten} reports rewritten; node 2 rebuilding {}; node 0 still waiting {}",
++        !m.sys.node(2).rebuilds.is_empty(),
++        m.woken(0).is_none()
++    );
++    assert!(!m.sys.node(2).rebuilds.is_empty(), "the rebuild ended");
++    assert!(m.woken(0).is_none(), "the request was answered");
++    assert_eq!(m.sys.check(), Ok(()));
++}
++
++/// A unit of 2^17 domain numbers on a machine of two node slots: the
++/// numbers of a slot are cut to 16 bits and the ranges overlap.
++#[test]
++fn v8_the_domain_numbers_of_a_unit_are_cut_to_16_bits() {
++    let mut machine = Machine::example();
++    machine.iommus[0].domains = 1 << 17;
++    let (model, _) = Model::boot(&machine).expect("the machine boots");
++    let (zero, one) = (model.domain_range(0, 0), model.domain_range(0, 1));
++    println!("V8: slot 0 {zero:?}, slot 1 {one:?}");
++    assert!(one.contains(zero.start()), "the ranges do not overlap");
++}

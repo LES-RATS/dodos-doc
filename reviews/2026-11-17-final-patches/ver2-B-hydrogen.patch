@@ -1,0 +1,750 @@
+diff --git a/model/src/blocks.rs b/model/src/blocks.rs
+index 01214b7..1266c19 100644
+--- a/model/src/blocks.rs
++++ b/model/src/blocks.rs
+@@ -166,7 +166,10 @@ impl Model {
+             Owner::Node(owner) => {
+                 owner == self.node && word.generation() == self.table.generation(self.node)
+             }
+-            Owner::Reserve(_) => false,
++            Owner::Reserve(j) => {
++                word.generation() == self.table.generation(self.node)
++                    && self.table.holds_reserve(self.node, j)
++            }
+             Owner::Unclaimed => false,
+         }
+     }
+@@ -295,6 +298,10 @@ impl Model {
+         }
+         self.idle_block(cap, object)?;
+         self.return_watermark(object)?;
++        // G5: a leaf count frozen by a failed unit keeps the entry whole.
++        if self.mapped_block(object) {
++            return Err(Error::Busy);
++        }
+         let unclaimed = Ownership::free(Owner::Unclaimed);
+         let spare = self
+             .table
+diff --git a/model/src/caps.rs b/model/src/caps.rs
+index fb6a5a8..8f382df 100644
+--- a/model/src/caps.rs
++++ b/model/src/caps.rs
+@@ -556,6 +556,7 @@ impl Model {
+                     watermark: 0,
+                     clean: 0,
+                     live: 0,
++                    lost: 0,
+                     ready: None,
+                 };
+                 self.untypeds.insert(id, untyped);
+@@ -1152,6 +1153,14 @@ impl Model {
+                 for at in space.table_pages().filter(|_| !pinned) {
+                     self.table.set_class(at / page, None);
+                 }
++                // Pinned pages are lost to the node until the machine
++                // restarts: they stay live pieces of their untyped.
++                if pinned {
++                    if let Some(from) = object.from {
++                        live(&mut self.untypeds, from).lost += 1 + space.tables as u32;
++                    }
++                    return;
++                }
+                 for untyped in object
+                     .from
+                     .iter()
+diff --git a/model/src/check.rs b/model/src/check.rs
+index da4fdd0..1fb6df4 100644
+--- a/model/src/check.rs
++++ b/model/src/check.rs
+@@ -813,7 +813,7 @@ impl Model {
+                 .iter()
+                 .filter(|(_, object)| object.from == Some(id));
+             let live: usize = taken.map(|(object, _)| 1 + segments(object)).sum();
+-            ensure(untyped.live as usize == live, "19: live count")?;
++            ensure(untyped.live as usize == live + untyped.lost as usize, "19: live count")?;
+             ensure(untyped.watermark <= untyped.bytes, "18: watermark within")?;
+             ensure(
+                 untyped.watermark.is_multiple_of(8),
+diff --git a/model/src/debug.rs b/model/src/debug.rs
+index 24f0c9a..d0d9652 100644
+--- a/model/src/debug.rs
++++ b/model/src/debug.rs
+@@ -102,7 +102,7 @@ impl CrashArea {
+     pub(crate) fn new(boot_id: u64, previous: u64, cores: usize) -> Self {
+         Self {
+             boot_id,
+-            sequence: previous + 1,
++            sequence: previous.checked_add(1).unwrap_or(1),
+             stop: None,
+             areas: (0..cores).map(|_| DebugArea::new(1)).collect(),
+         }
+@@ -268,7 +268,12 @@ impl Model {
+             .collect::<Vec<_>>()
+         {
+             let area = &mut std::sync::Arc::make_mut(&mut self.table.crash).areas[core];
+-            if area.magic != DEBUG_AREA_MAGIC || area.version != DEBUG_AREA_VERSION {
++            let next = |n: u64| n != 0 && n != u64::MAX;
++            if area.magic != DEBUG_AREA_MAGIC
++                || area.version != DEBUG_AREA_VERSION
++                || !next(area.next_kernel)
++                || !next(area.next_user)
++            {
+                 *area = DebugArea::new(generation);
+             }
+             (area.generation, area.slot) = (generation, self.node);
+diff --git a/model/src/lib.rs b/model/src/lib.rs
+index 7c285bc..e669fc5 100644
+--- a/model/src/lib.rs
++++ b/model/src/lib.rs
+@@ -582,6 +582,9 @@ struct Untyped {
+     /// Objects, segments of capability spaces and tables of address spaces
+     /// taken from it and not yet destroyed.
+     live: u32,
++    /// Of `live`: the pieces of iospaces destroyed while pinned, lost to
++    /// the node until the machine restarts (IOMMU, D-139).
++    lost: u32,
+     /// On several cores: the kernel epoch at which its watermark became
+     /// ready to return, at the destruction of its last object; it returns
+     /// at the first `untyped_retype` once a complete barrier covers that
+diff --git a/model/src/rings.rs b/model/src/rings.rs
+index 7e9a032..92db6ae 100644
+--- a/model/src/rings.rs
++++ b/model/src/rings.rs
+@@ -455,8 +455,24 @@ impl Model {
+             // A `Send`'s stamp carries 0 (a sender attached to no task) or
+             // a task identifier of the sender's node with a counter that is
+             // not 0 (D-134).
+-            Body::Send { stamp, .. } => {
++            Body::Send { stamp, grants, .. } => {
+                 let task = dodos_abi::TaskId::from_raw(stamp.0);
++                let depth = |g: &crate::grants::Granted| (1..=dodos_abi::TREE_DEPTH).contains(&g.depth);
++                if !grants.iter().all(depth) {
++                    return Some(0);
++                }
++                // The frame of each grant lies in memory the sender holds.
++                let shift = self.table.geometry.chunk_shift();
++                let held = |g: &crate::grants::Granted| match self.leaf_target(g.frame) {
++                    crate::memory::Target::Chunks => self
++                        .leaf_chunks(g.frame, 0, g.frame.pages)
++                        .into_iter()
++                        .all(|c| self.table.holds_page(c << shift, sender, generation)),
++                    _ => true,
++                };
++                if !grants.iter().all(held) {
++                    return Some(0);
++                }
+                 (stamp.0 != 0 && (task.counter() == 0 || task.node() != sender)).then_some(stamp.0)
+             }
+             // An answer names a credit of this node toward the sender that
+@@ -512,7 +528,10 @@ impl Model {
+             self.set_consumed(from, user, consumed + length);
+             served += 1;
+             match message {
+-                Some(message) => match self.refused(&message) {
++                Some(message) => match (message.header.sender == from)
++                    .then(|| self.refused(&message))
++                    .unwrap_or(Some(0))
++                {
+                     None => self.receive_message(message),
+                     Some(named) => {
+                         self.refused.0 += 1;
+diff --git a/model/src/scenarios/mod.rs b/model/src/scenarios/mod.rs
+index 5fc07f3..229b55f 100644
+--- a/model/src/scenarios/mod.rs
++++ b/model/src/scenarios/mod.rs
+@@ -17,6 +17,7 @@ mod pass20;
+ mod pass21;
+ mod reviews;
+ mod units;
++mod ver_b;
+ 
+ use crate::boot::{Core, Machine};
+ use crate::system::{Rng, System};
+diff --git a/model/src/scenarios/ver_b.rs b/model/src/scenarios/ver_b.rs
+new file mode 100644
+index 0000000..347cbd8
+--- /dev/null
++++ b/model/src/scenarios/ver_b.rs
+@@ -0,0 +1,555 @@
++//! Verification of report v2-B-hydrogen. Each test asserts what the
++//! contract asks; a test that fails shows the model's behaviour.
++
++use super::units::{DEVICE, IOMMU_ROLE, IOSPACE, attach, attached, three};
++use super::*;
++use crate::rings::Body;
++use crate::{Range, Transfer};
++use dodos_abi::{NODE_START_FRESH, NODE_STOP_KILL, RingHeader, START_SLOT_MAILBOX};
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++const CONTROL: u32 = dodos_abi::START_SLOT_MEMORY_CONTROL;
++
++fn control() -> SlotAddr {
++    s(CONTROL)
++}
++
++fn kill(n: u16) -> Syscall {
++    Syscall::NodeStop {
++        node: node_cap(n),
++        mode: NODE_STOP_KILL,
++        core: 0,
++    }
++}
++
++fn fresh(n: u16, mask: u64) -> Syscall {
++    Syscall::NodeStart {
++        node: node_cap(n),
++        mode: NODE_START_FRESH,
++        image: 0,
++        module: 0,
++        window: 0,
++        mask,
++    }
++}
++
++fn recv(first: u32) -> Syscall {
++    Syscall::Recv {
++        endpoint: s(START_SLOT_MAILBOX),
++        reply: s(100),
++        range: Range { first: s(first), count: 1 },
++        wait: 0,
++    }
++}
++
++/// Node `from` grants its frame at `frame` to node `to`, whose thread
++/// receives it at slot 110.
++fn grant(m: &mut S, from: u16, to: u16, frame: u32) {
++    let reply = m.retype(to, ObjectKind::Reply, 0, 100);
++    m.ok(to, reply);
++    assert_eq!(m.call(to, recv(110)), WAITS);
++    let rights = Rights::READ.union(Rights::WRITE).bits();
++    let send = Syscall::NodeSend {
++        node: node_cap(to),
++        message: crate::Message {
++            caps: vec![Transfer::Derive(s(frame), rights)],
++            ..crate::Message::default()
++        },
++        doorbell: SlotAddr::NONE,
++    };
++    assert_eq!(m.call(from, send), WAITS);
++    m.settle();
++    assert_eq!(m.woken(from), Some(&Ok(Output::Sent { flags: 0 })));
++}
++
++// Finding 1.
++
++#[test]
++fn ver_f1_a_reserve_chunk_taken_by_this_generation_is_busy() {
++    let mut m = three();
++    let shift = m.sys.canonical().geometry.chunk_shift();
++    let word = dodos_abi::Ownership::free(dodos_abi::Owner::Reserve(0)).raw();
++    let chunk = m.sys.canonical().owners.iter().position(|&w| w == word).unwrap() as u64;
++    let roles = slots_of(m.sys.node(0), m.t[0], ObjectKind::Role);
++    // Role index 2 is reserve 0 on the reference machine.
++    assert!(matches!(m.call(0, Syscall::RoleClaim(s(roles[2]))), Ok(Output::Epoch(_))));
++    let take = |destination| Syscall::MemoryTake {
++        control: control(),
++        kind: 0,
++        place: chunk << shift,
++        size: u64::from(shift),
++        destination: s(destination),
++    };
++    m.ok(0, take(160));
++    // An aspace in the block: its root page is a table page.
++    m.ok(0, retype_from(160, ObjectKind::ASpace, 0, 162));
++    let again = m.sys.apply(0, m.t[0], take(161));
++    let check = m.sys.node(0).check();
++    assert_eq!((again, check), (Err(Error::Busy), Ok(())));
++}
++
++// Finding 2.
++
++#[test]
++fn ver_f2_a_split_is_busy_while_the_entry_keeps_frozen_leaves() {
++    let mut m = three();
++    let ut = untyped_slot(m.sys.node(0), m.t[0]);
++    attached(&mut m, 0);
++    let take = |destination| Syscall::MemoryTake {
++        control: control(),
++        kind: 1,
++        place: 0,
++        size: 0,
++        destination: s(destination),
++    };
++    m.ok(0, take(160));
++    let frame = Syscall::UntypedRetype {
++        untyped: s(160),
++        kind: ObjectKind::Frame,
++        size: 1,
++        page: 0,
++        memory: dodos_abi::MemoryType::Uncached as u64,
++        destination: s(161),
++    };
++    m.ok(0, frame);
++    let map = Syscall::IoSpaceMap(crate::Map {
++        space: s(IOSPACE),
++        frame: s(161),
++        untyped: s(ut),
++        address: 0x1000_0000,
++        first: 0,
++        count: 1,
++        rights: Rights::READ.bits(),
++    });
++    m.ok(0, map);
++    m.sys.break_unit(IOMMU_ROLE);
++    assert_eq!(m.call(0, Syscall::IoSpaceUnmap(s(161))), WAITS);
++    m.run(30 * MS);
++    assert_eq!(m.woken(0), Some(&Err(Error::Busy)));
++    m.ok(0, Syscall::CapDelete(s(161)));
++    let frozen = m.sys.canonical().device_leaves[0];
++    assert!(frozen > 0);
++    let give = Syscall::MemoryGive { control: control(), untyped: s(160), node: 1 };
++    m.no(0, give, Error::Busy);
++    let split = Syscall::MemorySplit { control: control(), untyped: s(160) };
++    let outcome = m.call(0, split);
++    if outcome.is_ok() {
++        // What follows the split: the lower half taken again, its leaf
++        // count reset, and given to node 1.
++        let taken = m.sys.apply(0, m.t[0], take(162));
++        let leaves = m.sys.canonical().device_leaves[0];
++        let give = Syscall::MemoryGive { control: control(), untyped: s(162), node: 1 };
++        let given = m.sys.apply(0, m.t[0], give);
++        let owner = m.sys.canonical().devices[0].owner;
++        panic!(
++            "split {outcome:?}; take {taken:?}; leaves {frozen} -> {leaves}; \
++             give {given:?}; owner {:?}",
++            owner.owner()
++        );
++    }
++    assert_eq!(outcome, Err(Error::Busy));
++}
++
++// Finding 3.
++
++#[test]
++fn ver_f3_the_pages_of_a_pinned_iospace_are_not_reused() {
++    let mut m = three();
++    let ut = untyped_slot(m.sys.node(0), m.t[0]);
++    m.ok(0, retype_from(ut, ObjectKind::Untyped, 1 << 20, 160));
++    m.ok(0, retype_from(160, ObjectKind::IoSpace, 0, IOSPACE));
++    let iospace = m.sys.node(0).object_at(m.t[0], s(IOSPACE)).unwrap();
++    let root = m.sys.node(0).aspaces[&iospace].root.unwrap();
++    let page = root / m.sys.canonical().geometry.page();
++    let call = attach(&m, 0, IOSPACE, DEVICE);
++    assert_eq!(m.call(0, call), WAITS);
++    m.run(30 * MS);
++    assert_eq!(m.woken(0), Some(&DONE));
++    m.sys.break_unit(IOMMU_ROLE);
++    let mut outcome = Err(Error::Again);
++    for _ in 0..8 {
++        outcome = m.call(0, Syscall::CapDelete(s(IOSPACE)));
++        if outcome != Err(Error::Again) {
++            break;
++        }
++        m.run(10 * MS);
++    }
++    assert_eq!(outcome, DONE);
++    let pinned = dodos_abi::PageClass::iospace_root(1);
++    assert_eq!(m.sys.canonical().classes.get(&page), pinned.as_ref());
++    // The untyped the iospace came from makes a new aspace.
++    let retyped = m.sys.apply(0, m.t[0], retype_from(160, ObjectKind::ASpace, 0, 162));
++    let new_root = m
++        .sys
++        .node(0)
++        .object_at(m.t[0], s(162))
++        .and_then(|a| m.sys.node(0).aspaces[&a].root);
++    let class = m.sys.canonical().classes.get(&page).copied();
++    let check = m.sys.node(0).check();
++    assert!(
++        new_root != Some(root) && class == pinned && check.is_ok(),
++        "retype {retyped:?}; new root {new_root:x?} (old {root:x}); class {class:?}; {check:?}"
++    );
++}
++
++// Finding 4: what the model does, which is what the contract says.
++
++#[test]
++fn ver_f4_after_a_failed_detach_an_unmap_lowers_the_count_with_no_invalidation() {
++    let mut m = three();
++    let ut = untyped_slot(m.sys.node(0), m.t[0]);
++    attached(&mut m, 0);
++    let iospace = m.sys.node(0).object_at(m.t[0], s(IOSPACE)).unwrap();
++    m.ok(0, retype_from(ut, ObjectKind::Frame, 1, 160));
++    let frame = m.sys.node(0).object_at(m.t[0], s(160)).unwrap();
++    let chunk = m.sys.node(0).frames[&frame].base >> m.sys.canonical().geometry.chunk_shift();
++    let before = m.sys.canonical().map_count(chunk);
++    let map = Syscall::IoSpaceMap(crate::Map {
++        space: s(IOSPACE),
++        frame: s(160),
++        untyped: s(ut),
++        address: 0x1000_0000,
++        first: 0,
++        count: 1,
++        rights: Rights::READ.bits(),
++    });
++    m.ok(0, map);
++    assert_eq!(m.sys.canonical().map_count(chunk), before + 1);
++    assert_eq!(m.call(0, attach(&m, 0, 0, DEVICE)), WAITS);
++    m.sys.break_unit(IOMMU_ROLE);
++    m.run(30 * MS);
++    assert_eq!(m.woken(0), Some(&Err(Error::Busy)));
++    // The unit is failed, the word stays attached, the device left the
++    // header.
++    assert!(m.sys.role(IOMMU_ROLE).failed());
++    let word = m.sys.canonical().attach_word(DEVICE as u32);
++    assert_eq!(word.state(), Some(dodos_abi::AttachState::Attached));
++    assert!(m.sys.node(0).iospaces[&iospace].is_empty());
++    // The unmap succeeds at once and lowers the map count: no unit request.
++    m.ok(0, Syscall::IoSpaceUnmap(s(160)));
++    assert_eq!(m.sys.canonical().map_count(chunk), before);
++    // The frame goes, and its bytes can be retyped.
++    m.ok(0, Syscall::CapDelete(s(160)));
++}
++
++// Finding 5.
++
++#[test]
++fn ver_f5_a_remote_frame_is_refused_as_a_message_page() {
++    let mut m = S::two();
++    let ut0 = untyped_slot(m.sys.node(0), m.t[0]);
++    let ut1 = untyped_slot(m.sys.node(1), m.t[1]);
++    m.ok(0, retype_from(ut0, ObjectKind::Untyped, 1 << 16, 160));
++    m.ok(0, retype_from(160, ObjectKind::Frame, 1, 101));
++    grant(&mut m, 0, 1, 101);
++    m.ok(1, retype_from(ut1, ObjectKind::CSpace, 256, 121));
++    m.ok(1, retype_from(ut1, ObjectKind::Thread, 0, 120));
++    let configure = Syscall::ThreadConfigure {
++        thread: s(120),
++        cspace: s(121),
++        aspace: SlotAddr::NONE,
++        fault: SlotAddr::NONE,
++        page: s(110),
++    };
++    let outcome = m.call(1, configure);
++    if outcome.is_ok() {
++        // What follows: node 0 deletes its frame; the grant is freed with
++        // no Revoke (the use entry counts no leaf), and the page becomes
++        // node 0's aspace root while node 1's thread keeps it.
++        let leaves = m.sys.canonical().uses[1].values().next().map(|u| u.leaves);
++        m.ok(0, Syscall::CapDelete(s(101)));
++        let grants = m.sys.node(0).grant_entries().len();
++        m.ok(0, retype_from(160, ObjectKind::ASpace, 0, 102));
++        let thread = m.sys.node(1).object_at(m.t[1], s(120)).unwrap();
++        let page = m.sys.node(1).threads[&thread].page;
++        panic!(
++            "configure {outcome:?}; leaves {leaves:?}; grants left {grants}; \
++             page still bound {}; check {:?}",
++            page.is_some(),
++            m.sys.check()
++        );
++    }
++    assert_eq!(outcome, Err(Error::Invalid));
++}
++
++// Finding 6.
++
++#[test]
++fn ver_f6_a_grant_of_depth_0_does_not_stop_the_receiver() {
++    let mut m = S::two();
++    let reply = m.retype(1, ObjectKind::Reply, 0, 100);
++    m.ok(1, reply);
++    assert_eq!(m.call(1, recv(110)), WAITS);
++    let (gen0, gen1) = (m.sys.canonical().generation(0), m.sys.canonical().generation(1));
++    // Node 0, faulty, writes a live grant entry to node 1 through its own
++    // gate, and a Send naming it, with depth 0, into its own ring.
++    m.sys.edit_table(|t| {
++        t.grants[0].insert(
++            0,
++            crate::table::GrantEntry {
++                grantee: 1,
++                generation: gen1,
++                serial: 1,
++                state: crate::table::GrantState::Live,
++                answered: true,
++                use_index: Some(0),
++                doorbell: None,
++            },
++        );
++    });
++    let granted = crate::grants::Granted {
++        grant: 0,
++        serial: 1,
++        rights: Rights::READ.union(Rights::DERIVE),
++        depth: 0,
++        frame: crate::Frame {
++            page: dodos_abi::PageSize::Page,
++            pages: 1,
++            memory: dodos_abi::MemoryType::WriteBack,
++            base: 0x2000_0000,
++            kept: false,
++        },
++    };
++    let body = Body::Send {
++        header: dodos_abi::Header::new(0, 0, 1, 0).unwrap(),
++        stamp: (0, 0),
++        grants: vec![granted],
++        words: vec![],
++    };
++    let header = RingHeader::new(
++        dodos_abi::NodeMessage::Send,
++        body.entries() as u8,
++        (0, gen0),
++        gen1,
++        Some((dodos_abi::REQUESTS_PER_PEER as u8, 1)),
++    );
++    m.sys.inject(0, 1, crate::RingMessage { header, body });
++    // No check here: node 0's own state is the faulty kernel's.
++    m.sys.settle(100_000);
++    let placed = m.sys.node(1).object_at(m.t[1], s(110)).is_some();
++    let derive = Syscall::CapDerive {
++        source: s(110),
++        destination: s(111),
++        rights: Rights::READ.bits(),
++        badge: 0,
++    };
++    if !placed {
++        // The receive check refused the Send: node 1 still waits.
++        assert_eq!(m.woken(1), None);
++        return;
++    }
++    let t1 = m.t[1];
++    let outcome = catch_unwind(AssertUnwindSafe(|| m.sys.apply(1, t1, derive)));
++    assert!(outcome.is_ok(), "placed {placed}; the derive panicked");
++}
++
++// Finding 7.
++
++#[test]
++fn ver_f7_a_previous_crash_area_of_sequence_max_does_not_stop_the_boot() {
++    let mut machine = Machine::example();
++    machine.previous_crash = Some(crate::debug::CrashArea::new(1, u64::MAX - 1, 1));
++    assert_eq!(machine.previous_crash.as_ref().unwrap().sequence, u64::MAX);
++    let booted = catch_unwind(AssertUnwindSafe(|| Model::boot(&machine).is_ok()));
++    assert!(booted.is_ok(), "the boot panicked");
++}
++
++// Finding 8.
++
++#[test]
++fn ver_f8_a_debug_area_left_with_next_sequence_0_does_not_stop_the_next_node() {
++    let mut m = three();
++    m.ok(2, kill(1));
++    m.run(30 * MS);
++    assert_eq!(m.state(1), MemberState::Dead);
++    // What node 1's faulty generation left in the area of its core 1: right
++    // magic and version, next kernel sequence 0.
++    m.sys.edit_table(|t| std::sync::Arc::make_mut(&mut t.crash).areas[1].next_kernel = 0);
++    let started = catch_unwind(AssertUnwindSafe(|| {
++        m.ok(2, fresh(1, 0b10));
++        m.run(5 * MS);
++        m.state(1)
++    }));
++    assert!(matches!(started, Ok(MemberState::Live)), "the start panicked or failed");
++}
++
++// Finding 9.
++
++#[test]
++fn ver_f9_a_context_configured_again_from_not_configured_reads_consumed_from_0() {
++    let mut m = S::on(&machine(Arch::X86_64, 2, &[&[0, 1]]));
++    m.thread_on(0, 300, 1);
++    m.sys.advance(500_000);
++    let read = |m: &mut S| match m.call(0, Syscall::SchedRead(s(301))) {
++        Ok(Output::SchedRead { consumed, .. }) => consumed,
++        other => panic!("{other:?}"),
++    };
++    assert!(read(&mut m) > 0);
++    let configure = |budget, period| Syscall::SchedConfigure {
++        sched: s(301),
++        node: node_cap(0),
++        core: 1,
++        budget,
++        period,
++        class: 0,
++    };
++    m.ok(0, configure(0, 0));
++    assert_eq!(read(&mut m), 0);
++    m.ok(0, configure(1_000_000, 10_000_000));
++    assert_eq!(read(&mut m), 0);
++}
++
++// The header that names another node than the ring it came on.
++
++#[test]
++fn ver_x_a_release_written_by_node_2_in_node_1s_name_is_refused() {
++    let mut m = three();
++    let ut = untyped_slot(m.sys.node(0), m.t[0]);
++    m.ok(0, retype_from(ut, ObjectKind::Untyped, 1 << 16, 160));
++    m.ok(0, retype_from(160, ObjectKind::Frame, 1, 101));
++    grant(&mut m, 0, 1, 101);
++    let map = Syscall::ASpaceMap(crate::Map {
++        space: s(dodos_abi::START_SLOT_ASPACE),
++        frame: s(110),
++        untyped: SlotAddr::NONE,
++        address: 1 << 30,
++        first: 0,
++        count: 1,
++        rights: Rights::READ.bits(),
++    });
++    m.ok(1, map);
++    let (index, entry) = m.sys.canonical().grants[0].iter().next().map(|(&i, &e)| (i, e)).unwrap();
++    assert_eq!(m.sys.canonical().uses[1].values().next().unwrap().leaves, 1);
++    // Node 2, faulty, writes into its own ring to node 0 a Release whose
++    // header names node 1, with node 1's generation (public words).
++    let body = Body::Release { grant: index, serial: entry.serial };
++    let header = RingHeader::new(
++        dodos_abi::NodeMessage::Release,
++        body.entries() as u8,
++        (1, m.sys.canonical().generation(1)),
++        m.sys.canonical().generation(0),
++        None,
++    );
++    m.sys.inject(2, 0, crate::RingMessage { header, body });
++    let to = m.sys.now() + 20 * MS;
++    m.sys.advance(to);
++    let live = m.sys.canonical().grants[0].contains_key(&index);
++    if !live {
++        // What follows: node 0 deletes its frame and makes an aspace whose
++        // root is the page node 1 still maps.
++        let base = m.sys.node(0).frames[&m.sys.node(0).object_at(m.t[0], s(101)).unwrap()].base;
++        let deleted = m.sys.apply(0, m.t[0], Syscall::CapDelete(s(101)));
++        let retyped = m.sys.apply(0, m.t[0], retype_from(160, ObjectKind::ASpace, 0, 102));
++        let aspace = m.sys.node(0).object_at(m.t[0], s(102));
++        let root = aspace.and_then(|a| m.sys.node(0).aspaces[&a].root);
++        let leaves = m.sys.canonical().uses[1].values().next().map(|u| u.leaves);
++        panic!(
++            "grant freed by a forged Release; delete {deleted:?}; frame base {base:x}; retype {retyped:?}, \
++             new root {root:x?}; node 1 leaves {leaves:?}; check {:?}",
++            m.sys.check()
++        );
++    }
++}
++
++// Observed in passing: the receiver takes the frame of a grant from the
++// Send, not from the granter's anchor.
++
++#[test]
++fn ver_y_a_send_cannot_name_a_frame_outside_its_grants_anchor() {
++    let mut m = three();
++    let frame = m.retype(0, ObjectKind::Frame, 1, 101);
++    m.ok(0, frame);
++    grant(&mut m, 0, 1, 101);
++    let (index, entry) = m.sys.canonical().grants[0].iter().next().map(|(&i, &e)| (i, e)).unwrap();
++    // A frame of node 2, which node 0 does not hold.
++    let other = m.retype(2, ObjectKind::Frame, 1, 101);
++    m.ok(2, other);
++    let base = m.sys.node(2).frames[&m.sys.node(2).object_at(m.t[2], s(101)).unwrap()].base;
++    assert_eq!(m.call(1, recv(112)), WAITS);
++    let granted = crate::grants::Granted {
++        grant: index,
++        serial: entry.serial,
++        rights: Rights::READ.union(Rights::WRITE),
++        depth: 2,
++        frame: crate::Frame {
++            page: dodos_abi::PageSize::Page,
++            pages: 1,
++            memory: dodos_abi::MemoryType::WriteBack,
++            base,
++            kept: false,
++        },
++    };
++    let body = Body::Send {
++        header: dodos_abi::Header::new(0, 0, 1, 0).unwrap(),
++        stamp: (0, 0),
++        grants: vec![granted],
++        words: vec![],
++    };
++    let header = RingHeader::new(
++        dodos_abi::NodeMessage::Send,
++        body.entries() as u8,
++        (0, m.sys.canonical().generation(0)),
++        m.sys.canonical().generation(1),
++        Some((dodos_abi::REQUESTS_PER_PEER as u8, 1)),
++    );
++    m.sys.inject(0, 1, crate::RingMessage { header, body });
++    m.sys.settle(100_000);
++    let placed = m.sys.node(1).object_at(m.t[1], s(112));
++    let Some(remote) = placed else { return };
++    let map = Syscall::ASpaceMap(crate::Map {
++        space: s(dodos_abi::START_SLOT_ASPACE),
++        frame: s(112),
++        untyped: SlotAddr::NONE,
++        address: 1 << 31,
++        first: 0,
++        count: 1,
++        rights: Rights::READ.union(Rights::WRITE).bits(),
++    });
++    let mapped = m.sys.apply(1, m.t[1], map);
++    let at = m.sys.node(1).frames[&remote].base;
++    assert!(
++        mapped.is_err(),
++        "node 1 maps {at:x}, node 2's frame {base:x}, writable: {mapped:?}; node 1 check {:?}",
++        m.sys.node(1).check()
++    );
++}
++
++#[test]
++fn ver_f1b_a_second_block_cannot_map_the_first_blocks_page_table_writable() {
++    let mut m = three();
++    let shift = m.sys.canonical().geometry.chunk_shift();
++    let word = dodos_abi::Ownership::free(dodos_abi::Owner::Reserve(0)).raw();
++    let chunk = m.sys.canonical().owners.iter().position(|&w| w == word).unwrap() as u64;
++    let roles = slots_of(m.sys.node(0), m.t[0], ObjectKind::Role);
++    assert!(matches!(m.call(0, Syscall::RoleClaim(s(roles[2]))), Ok(Output::Epoch(_))));
++    let take = |destination| Syscall::MemoryTake {
++        control: control(),
++        kind: 0,
++        place: chunk << shift,
++        size: u64::from(shift),
++        destination: s(destination),
++    };
++    m.ok(0, take(160));
++    m.ok(0, retype_from(160, ObjectKind::ASpace, 0, 162));
++    let aspace = m.sys.node(0).object_at(m.t[0], s(162)).unwrap();
++    let root = m.sys.node(0).aspaces[&aspace].root.unwrap();
++    if m.sys.apply(0, m.t[0], take(161)).is_err() {
++        return;
++    }
++    let frame = m.sys.apply(0, m.t[0], retype_from(161, ObjectKind::Frame, 1, 163));
++    let base = m.sys.node(0).object_at(m.t[0], s(163)).map(|f| m.sys.node(0).frames[&f].base);
++    let map = Syscall::ASpaceMap(crate::Map {
++        space: s(dodos_abi::START_SLOT_ASPACE),
++        frame: s(163),
++        untyped: SlotAddr::NONE,
++        address: 1 << 31,
++        first: 0,
++        count: 1,
++        rights: Rights::READ.union(Rights::WRITE).bits(),
++    });
++    let mapped = m.sys.apply(0, m.t[0], map);
++    assert!(
++        mapped.is_err(),
++        "frame {frame:?} at {base:x?}, aspace root {root:x}; writable map {mapped:?}"
++    );
++}
+diff --git a/model/src/sched.rs b/model/src/sched.rs
+index c079802..c867ecc 100644
+--- a/model/src/sched.rs
++++ b/model/src/sched.rs
+@@ -818,6 +818,7 @@ impl Model {
+         let sched = live(&mut self.scheds, context);
+         if off {
+             sched.configured = false;
++            sched.consumed = 0;
+             (sched.remaining, sched.deadline, sched.throttled) = (0, 0, None);
+             (sched.budget, sched.period, sched.pending) = (0, 0, None);
+         } else if !sched.configured {
+diff --git a/model/src/threads.rs b/model/src/threads.rs
+index 071842f..fd8e09a 100644
+--- a/model/src/threads.rs
++++ b/model/src/threads.rs
+@@ -77,6 +77,10 @@ impl Model {
+         if self.objects[&object].kind == ObjectKind::Frame && !one_page {
+             return Err(Error::Invalid);
+         }
++        // Grants: a remote frame is refused as a message page.
++        if self.remotes.contains_key(&object) {
++            return Err(Error::Invalid);
++        }
+         self.is(cap, ObjectKind::Frame, Rights::READ.union(Rights::WRITE))?;
+         Ok(cap)
+     }

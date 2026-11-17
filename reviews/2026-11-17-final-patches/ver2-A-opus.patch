@@ -1,0 +1,550 @@
+diff --git a/abi/tests/ver2a.rs b/abi/tests/ver2a.rs
+new file mode 100644
+index 0000000..c6eef0c
+--- /dev/null
++++ b/abi/tests/ver2a.rs
+@@ -0,0 +1,212 @@
++//! Verification of lot A of the second round of reviews (V2-A): the pure
++//! functions of `abi/` that the report `reports/v2-A-opus.md` attacks,
++//! reproduced here from the code and run. A test that passes says the
++//! weakness is there; a test named `..._panics` uses `catch_unwind`, since
++//! the test profile keeps the overflow checks of the workspace's
++//! `Cargo.toml`.
++use dodos_abi::aarch64;
++use dodos_abi::x86_64::{dr7_valid, msi_direct};
++use dodos_abi::{
++    AttachWord, ClockPage, ExceptionUse, FaultKind, GateWord, Geometry, Owner, Ownership, PageSize,
++    REQUESTS_PER_PEER, RESERVES_MAX, RingHeader, RoleWord, SENDS_PER_PEER, NodeMessage, TIME_LIMIT,
++    TraceCode, firing_instant, module_frames, trace_index,
++};
++use std::panic::catch_unwind;
++
++fn geometry() -> Geometry {
++    Geometry {
++        page_shift: [12, 21, 30, 0],
++        entries: 512,
++        levels: 4,
++        user_end: (1 << 47) - (1 << 30),
++    }
++}
++
++// Finding 2: a watchpoint taken at the kernel's own level (0x35) is the
++// kernel's, whatever the access was.
++
++#[test]
++fn ver2a_a_watchpoint_at_the_kernels_own_level_is_not_the_threads() {
++    // ESR_ELx.EC = 0x35, watchpoint without a change of Exception level.
++    assert_eq!(aarch64::exception_use(0x35 << 26), Some(ExceptionUse::NotThread));
++    // 0x34, the same watchpoint from EL0, is the thread's.
++    assert_eq!(
++        aarch64::exception_use(0x34 << 26),
++        Some(ExceptionUse::Fault(FaultKind::HardwareBreakpoint))
++    );
++}
++
++// Finding 3: the index of sequence 0, which a kept debug area can hold.
++
++#[test]
++fn ver2a_trace_index_of_sequence_0_panics() {
++    assert_eq!(trace_index(1, 4_032), 0);
++    assert_eq!(trace_index(4_033, 4_032), 0);
++    let caught = catch_unwind(|| trace_index(0, 4_032));
++    println!("trace_index(0, 4032): {caught:?}");
++    assert!(caught.is_err(), "sequence 0 subtracts with overflow");
++}
++
++// Finding 4: a boot image's page shift overflows the check instead of being
++// refused.
++
++#[test]
++fn ver2a_geometry_valid_overflows_on_a_large_page_shift() {
++    let g = Geometry {
++        page_shift: [12, 250, 30, 0],
++        entries: 512,
++        levels: 4,
++        user_end: (1 << 47) - (1 << 30),
++    };
++    let caught = catch_unwind(|| g.valid());
++    println!("valid() on page_shift [12, 250, 30, 0]: {caught:?}");
++    assert!(caught.is_err(), "s[1] + per_level overflows u8");
++    // The same values, with the missing size made 0, are refused in words.
++    assert!(!Geometry {
++        page_shift: [12, 250, 0, 0],
++        ..g
++    }
++    .valid());
++}
++
++// Finding 5: `module_frames` on a module's length or address.
++
++#[test]
++fn ver2a_module_frames_overflows_on_a_length_and_on_an_address() {
++    let g = geometry();
++    let long = catch_unwind(|| module_frames(0, None, u64::MAX, g).count());
++    println!("module_frames(len = u64::MAX): {long:?}");
++    assert!(long.is_err(), "len.div_ceil(page) * page overflows");
++    let high = catch_unwind(|| module_frames(u64::MAX - 4095, None, 3 * 4096, g).count());
++    println!("module_frames(phys = 2^64 - 4096, 3 pages): {high:?}");
++    assert!(high.is_err(), "phys + offset overflows");
++}
++
++#[test]
++fn ver2a_module_frames_of_an_unaligned_address_are_unaligned_pages() {
++    let g = geometry();
++    let first = module_frames(0x1234, None, 2 * 4096, g).next().expect("a frame");
++    println!("module_frames(phys = 0x1234): {first:?}");
++    assert_eq!(first.size, PageSize::Page);
++    assert!(!(0x1234u64).is_multiple_of(g.page()), "on an unaligned address");
++}
++
++// Finding 6: an MSI whose physical destination is APIC ID 255.
++
++#[test]
++fn ver2a_msi_direct_accepts_the_broadcast_apic_id() {
++    assert_eq!(msi_direct(255, 0xEF), Some((0xFEEF_F000, 0xEF)));
++    assert_eq!(msi_direct(256, 0xEF), None);
++}
++
++// Finding 7: decodings that accept what no constructor writes.
++
++#[test]
++fn ver2a_a_handing_role_word_with_nobody_is_accepted() {
++    let nobody = RoleWord::handing(0xFFFF, 0xFFFF, 1);
++    assert!(RoleWord::from_raw(nobody.raw()).is_some(), "handing to nobody");
++    let itself = RoleWord::handing(3, 3, 1);
++    assert!(RoleWord::from_raw(itself.raw()).is_some(), "handing to itself");
++    let absent = RoleWord::held(0xFFFF, 1);
++    println!("held(ROLE_NOBODY): {:?}", RoleWord::from_raw(absent.raw()));
++}
++
++#[test]
++fn ver2a_an_owner_node_of_0xffff_reads_as_unclaimed() {
++    let word = Ownership::taken(Owner::Node(0xFFFF), 7);
++    println!(
++        "taken(Node(0xFFFF)) -> {:?}, from_raw {:?}",
++        word.owner(),
++        Ownership::from_raw(word.raw()).map(|w| w.owner())
++    );
++    assert_eq!(word.owner(), Owner::Unclaimed);
++    // And a node above the table, built directly, reads the same way.
++    let high = Ownership::taken(Owner::Node(2000), 7);
++    assert_eq!(high.owner(), Owner::Unclaimed);
++}
++
++#[test]
++fn ver2a_a_credit_index_past_the_credits_is_read_as_one() {
++    let credits = (REQUESTS_PER_PEER + SENDS_PER_PEER) as u8;
++    for index in credits..31u8 {
++        let header = RingHeader::new(
++            NodeMessage::UnitAnswer,
++            1,
++            (1, 1),
++            1,
++            Some((index, 5)),
++        );
++        println!("credit index {index}: {:?}", header.credit());
++        assert!(header.credit().is_some(), "index {index} names no credit");
++    }
++}
++
++#[test]
++fn ver2a_a_gate_word_takes_more_pages_than_a_chunk_of_512_has() {
++    let word = GateWord::from_raw(1 | (4_000u64) << 32);
++    println!("not_data 4000 on a chunk of 512 pages: {word:?}");
++    assert!(word.is_some());
++}
++
++#[test]
++fn ver2a_dr7_accepts_an_execution_breakpoint_with_a_length() {
++    // Local enable 0, R/W0 = 00 (execution), LEN0 = 11 (four bytes).
++    let word = 1 | 0b11 << 18;
++    println!("dr7 {word:#x}: {}", dr7_valid(word));
++    assert!(dr7_valid(word));
++}
++
++// Finding 8: pure functions outside the domain their callers keep.
++
++#[test]
++fn ver2a_firing_instant_at_and_beyond_the_time_limit_panics() {
++    assert_eq!(firing_instant(0, 0), 0);
++    assert_eq!(firing_instant(100, 100), 128);
++    let at = catch_unwind(|| firing_instant(TIME_LIMIT, 0));
++    println!("firing_instant(2^63, 0): {at:?}");
++    assert!(at.is_err(), "63 - 64 subtracts with overflow");
++}
++
++#[test]
++fn ver2a_clock_page_shift_of_128_panics() {
++    let page = ClockPage {
++        version: 1,
++        seq: 0,
++        shift: 128,
++        flags: 0,
++        mult: 1,
++        counter_base: 0,
++        ns_base: 0,
++    };
++    let read = catch_unwind(|| page.nanoseconds(10));
++    println!("shift 128: {read:?}");
++    assert!(read.is_err(), "a shift of 128 overflows");
++}
++
++#[test]
++fn ver2a_bandwidth_outside_its_domain_panics() {
++    let caught = catch_unwind(|| dodos_abi::bandwidth(10, 1 << 48));
++    println!("bandwidth(10, 2^48): {caught:?}");
++    assert!(caught.is_err());
++    let over = catch_unwind(|| dodos_abi::bandwidth(11, 10));
++    assert!(over.is_err(), "budget above the period");
++}
++
++#[test]
++fn ver2a_an_owner_reserve_past_the_reserves_overflows_its_code() {
++    assert_eq!(Owner::Reserve(RESERVES_MAX as u16 - 1).code(), 0xFFF7);
++    let caught = catch_unwind(|| Owner::Reserve(16).code());
++    println!("Owner::Reserve(16).code(): {caught:?}");
++    assert!(caught.is_err());
++}
++
++// The values the report says are sound, kept here so that the two findings
++// above are not read as a doubt on the rest of these decoders.
++
++#[test]
++fn ver2a_the_decoders_of_the_lot_agree_with_their_constructors_otherwise() {
++    assert!(!TraceCode::user(TraceCode::Refused));
++    assert!(TraceCode::user(TraceCode::UserEmit));
++    assert!(AttachWord::new(dodos_abi::AttachState::Detached, 4096).is_some());
++    assert_eq!(Ownership::taken(Owner::Node(0), 1).owner(), Owner::Node(0));
++}
+diff --git a/model/src/scenarios/mod.rs b/model/src/scenarios/mod.rs
+index 5fc07f3..13cc8d0 100644
+--- a/model/src/scenarios/mod.rs
++++ b/model/src/scenarios/mod.rs
+@@ -17,6 +17,7 @@ mod pass20;
+ mod pass21;
+ mod reviews;
+ mod units;
++mod ver2a;
+ 
+ use crate::boot::{Core, Machine};
+ use crate::system::{Rng, System};
+diff --git a/model/src/scenarios/ver2a.rs b/model/src/scenarios/ver2a.rs
+new file mode 100644
+index 0000000..a06fd58
+--- /dev/null
++++ b/model/src/scenarios/ver2a.rs
+@@ -0,0 +1,314 @@
++//! Verification of lot A of the second round of reviews (V2-A): the findings
++//! of `reports/v2-A-opus.md` that the model holds, reproduced from a faulty
++//! kernel's own writes and messages. The file is mine; nothing of the
++//! author's work copy was copied. Each test names the sentence it is about.
++
++use super::*;
++use crate::rings::{Body, Message, UnitOp};
++use dodos_abi::{AttachState, NodeMessage, REQUESTS_PER_PEER, RingHeader, TaskId};
++
++const REPLY: u32 = 100;
++const GOT: u32 = 110;
++
++fn recv() -> Syscall {
++    Syscall::Recv {
++        endpoint: s(dodos_abi::START_SLOT_MAILBOX),
++        reply: s(REPLY),
++        range: crate::Range {
++            first: s(GOT),
++            count: 4,
++        },
++        wait: 0,
++    }
++}
++
++/// The message a faulty kernel writes into a ring it owns: the header names
++/// `sender` whatever the ring, as its own kernel writes its own ring.
++fn forged(
++    kind: NodeMessage,
++    sender: (u16, u32),
++    receiver_generation: u32,
++    credit: Option<(u8, u32)>,
++    body: Body,
++) -> Message {
++    Message {
++        header: RingHeader::new(
++            kind,
++            body.entries() as u8,
++            sender,
++            receiver_generation,
++            credit,
++        ),
++        body,
++    }
++}
++
++// Finding 1, the unit operation: "What ties each request to its requester
++// (D-140). The receive check holds the sender's node and generation against
++// its member word ... then each operation names something of the requester's"
++// (Devices and shared hardware). The requester is the sender the message
++// carries, so a third node's ring serves a request in the owner's name.
++
++#[test]
++fn ver2a_a_detach_written_on_a_third_nodes_ring_in_the_owners_name_detaches_the_device() {
++    use super::units::{DEVICE, attached};
++    let mut m = super::pass17::three_units();
++    attached(&mut m, 0);
++    let role = 0usize;
++    let holder = m.sys.role(role).holder();
++    assert_eq!(holder, 1, "node 1 holds the unit roles of this machine");
++    let epoch = m.sys.role(role).epoch();
++    let word = m.sys.canonical().attach_word(DEVICE as u32);
++    assert_eq!(word.state(), Some(AttachState::Attached));
++    let root = word.root();
++    let domain = m.sys.canonical().units[&role].domains[&(DEVICE as u16)];
++    let attacker = 2u16;
++    assert_ne!(attacker, holder);
++    // Every word the request needs is in the global read-only set: the
++    // attach word, the identifier word and the unit's entry.
++    let g0 = m.sys.member(0).generation();
++    let gh = m.sys.member(holder).generation();
++    let body = Body::UnitRequest {
++        role: role as u16,
++        epoch,
++        op: UnitOp::Detach {
++            device: DEVICE as u16,
++            domain,
++            root,
++        },
++    };
++    // The same request, honestly signed by the attacker, is refused.
++    let before = m.sys.node(holder).refused.0;
++    m.sys.inject(
++        attacker,
++        holder,
++        forged(
++            NodeMessage::UnitRequest,
++            (attacker, m.sys.member(attacker).generation()),
++            gh,
++            Some((0, 1)),
++            body.clone(),
++        ),
++    );
++    m.run(10 * MS);
++    println!("refused by the holder: {}", m.sys.node(holder).refused.0 - before);
++    assert_eq!(
++        m.sys.canonical().attach_word(DEVICE as u32).state(),
++        Some(AttachState::Attached),
++        "the attacker in its own name gains nothing"
++    );
++    // The same request on the same ring, naming the owner in the header.
++    m.sys.inject(
++        attacker,
++        holder,
++        forged(
++            NodeMessage::UnitRequest,
++            (0, g0),
++            gh,
++            Some((0, 1)),
++            body,
++        ),
++    );
++    m.run(10 * MS);
++    let after = m.sys.canonical().attach_word(DEVICE as u32).state();
++    println!("attach word after the forged detach: {after:?}");
++    println!(
++        "the unit's entry of the device: {:?}",
++        m.sys.canonical().units[&role].entries.get(&(DEVICE as u16))
++    );
++    assert_ne!(
++        after,
++        Some(AttachState::Attached),
++        "node 2 detached node 0's device through node 1"
++    );
++}
++
++// Finding 1, the identity of a send: the same forgery with a `Send`, which
++// the paragraph's check judges on the stamp the message carries.
++
++#[test]
++fn ver2a_a_send_written_on_a_third_nodes_ring_in_another_nodes_name_is_delivered_as_that_nodes() {
++    let mut m = S::on(&machine(crate::Arch::X86_64, 3, &[&[0], &[1], &[2]]));
++    let reply = m.retype(1, ObjectKind::Reply, 0, REPLY);
++    m.ok(1, reply);
++    assert_eq!(m.call(1, recv()), WAITS);
++    let attacker = 2u16;
++    let g0 = m.sys.member(0).generation();
++    let g1 = m.sys.member(1).generation();
++    let task = TaskId::new(0, 1);
++    let body = Body::Send {
++        header: dodos_abi::Header::new(7, 1, 0, 0).expect("a header"),
++        stamp: (task.raw(), 0),
++        grants: vec![],
++        words: vec![7],
++    };
++    // The attacker's own name first: the check refuses the stamp, which
++    // names another node's task.
++    let before = m.sys.node(1).refused.0;
++    m.sys.inject(
++        attacker,
++        1,
++        forged(
++            NodeMessage::Send,
++            (attacker, m.sys.member(attacker).generation()),
++            g1,
++            Some((REQUESTS_PER_PEER as u8, 1)),
++            body.clone(),
++        ),
++    );
++    m.settle();
++    assert_eq!(
++        m.sys.node(1).refused.0,
++        before + 1,
++        "refused when the attacker names itself"
++    );
++    assert_eq!(m.woken(1), None);
++    // The same message on the same ring, naming node 0, whose task 1 the
++    // stamp names.
++    m.sys.inject(
++        attacker,
++        1,
++        forged(
++            NodeMessage::Send,
++            (0, g0),
++            g1,
++            Some((REQUESTS_PER_PEER as u8, 1)),
++            body,
++        ),
++    );
++    m.settle();
++    let woken = m.woken(1).cloned();
++    println!("delivered to node 1: {woken:?}");
++    let Some(Ok(Output::Message(delivery))) = woken else {
++        panic!("node 1 receives it: {woken:?}");
++    };
++    assert_eq!(
++        delivery.received.task,
++        task.raw(),
++        "as node 0's task 1, with node 0's marks"
++    );
++}
++
++// Finding 5 in the model: a boot image whose file is longer than the memory
++// it is placed in. The contract's start-up refuses a layout it cannot honour
++// (Values of the machine, Start-up state); the model panics in the layout
++// before `module_frames` is reached.
++
++#[test]
++fn ver2a_a_file_of_the_boot_image_longer_than_memory_panics_the_layout() {
++    use crate::boot::File;
++    let with_file = |len| {
++        let mut machine = Machine::example();
++        machine.files.push(File { len, name: 7 });
++        machine
++    };
++    let panics = std::panic::catch_unwind(|| with_file(u64::MAX - 10).layout().is_err());
++    println!("a file of 2^64 - 11 bytes: {panics:?}");
++    assert!(panics.is_err(), "the layout panics instead of refusing");
++    let huge = with_file(1 << 45).layout().map(|_| ());
++    println!("a file of 2^45 bytes: {huge:?}");
++    assert!(huge.is_err(), "refused");
++}
++
++// Finding 1, an answer: "an answer ... names a credit of this node toward
++// the sender that is in use, with that serial and the kind of request it
++// answers" (One check on every message received). The credit is judged
++// against the sender the message carries, so a third node's ring can end
++// another node's wait.
++
++#[test]
++fn ver2a_an_answer_written_on_a_third_nodes_ring_in_another_nodes_name_is_applied() {
++    let mut m = S::on(&machine(crate::Arch::X86_64, 3, &[&[0], &[1], &[2]]));
++    // Node 0's core stops answering, so the answer node 1 waits for never
++    // comes; the node is not accused yet, its heartbeat has just stopped.
++    m.sys.hang(0, false);
++    let send = Syscall::NodeSend {
++        node: node_cap(0),
++        message: crate::Message {
++            words: vec![7],
++            ..crate::Message::default()
++        },
++        doorbell: SlotAddr::NONE,
++    };
++    assert_eq!(m.call(1, send), WAITS);
++    m.settle();
++    assert_eq!(m.woken(1), None, "the stopped node answers nothing");
++    let g0 = m.sys.member(0).generation();
++    let g1 = m.sys.member(1).generation();
++    // The attacker guesses the credit: the serials from 0 up, the send
++    // credits from 16. Node 1 keeps its credits in its own state, so the
++    // guess is the only way.
++    let mut accepted = None;
++    for serial in 0..8u32 {
++        let body = Body::SendAnswer {
++            delivered: true,
++            dropped: false,
++            uses: vec![],
++        };
++        m.sys.inject(
++            2,
++            1,
++            forged(
++                NodeMessage::SendAnswer,
++                (0, g0),
++                g1,
++                Some((REQUESTS_PER_PEER as u8, serial)),
++                body,
++            ),
++        );
++        m.settle();
++        if m.woken(1).is_some() {
++            accepted = Some(serial);
++            break;
++        }
++    }
++    println!("the serial that ended node 1's wait: {accepted:?}");
++    println!(
++        "node 1's credits toward node 0: {}",
++        m.sys.node(1).peers[0].credits.iter().flatten().count()
++    );
++    let woken = m.woken(1).cloned();
++    println!("node 1 woke with: {woken:?}");
++    assert!(
++        accepted.is_some(),
++        "an answer in node 0's name ends node 1's wait"
++    );
++    assert_eq!(
++        m.sys.node(1).peers[0].credits.iter().flatten().count(),
++        0,
++        "the credit is taken by a node that never wrote it"
++    );
++}
++
++// Finding 3: "if the header's magic and version are right it sets the node
++// slot and generation and goes on from the next sequences found there"
++// (What the kernel keeps for debugging).
++
++#[test]
++fn ver2a_a_next_sequence_of_0_left_in_a_kept_debug_area_panics_the_next_writer() {
++    let mut m = S::two();
++    m.ok(1, super::pass17::kill(0));
++    m.run(10 * MS);
++    assert_eq!(m.state(0), MemberState::Dead);
++    // The area of core 0, as the generation before left it: magic and
++    // version right, the next sequence of the kernel ring 0. The write is
++    // the faulty kernel's own, into the memory only its core writes; the
++    // model has no call that makes it, so the test states it as an input.
++    m.sys.edit_table(|t| {
++        let area = &mut std::sync::Arc::make_mut(&mut t.crash).areas[0];
++        println!(
++            "kept area: magic {:#x} version {} next_kernel {} next_user {}",
++            area.magic, area.version, area.next_kernel, area.next_user
++        );
++        area.next_kernel = 0;
++        area.next_user = 0;
++    });
++    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++        m.ok(1, super::pass17::fresh(0, 0b1));
++        // The core takes the start request and the new kernel writes its
++        // first entry of code 1 into the area it kept.
++        m.run(10 * MS);
++    }));
++    println!("the next node's first trace: {started:?}");
++    assert!(started.is_err(), "the next writer subtracts with overflow");
++}

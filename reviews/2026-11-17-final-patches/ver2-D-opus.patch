@@ -1,0 +1,550 @@
+diff --git a/model/src/boot.rs b/model/src/boot.rs
+index 8339b15..8c098bf 100644
+--- a/model/src/boot.rs
++++ b/model/src/boot.rs
+@@ -628,7 +628,14 @@ impl Machine {
+         // Firmware boots one core (the bootstrap processor on x86-64).
+         let list = self.core_list();
+         let booted: Vec<usize> = (0..list.len()).filter(|&c| list[c].booted).collect();
++        // The address width of the iospaces is a value of the machine ("the
++        // ones every unit supports"): a width below the page's is no machine,
++        // and the limit of a mapping is a u64 here, so 64 bits is refused
++        // until it is widened (39, 48 and 57 are the widths of real units).
++        let io_width_ok =
++            self.io_width >= u32::from(geometry.page_shift[0]) && self.io_width < 64;
+         if !geometry.valid()
++            || !io_width_ok
+             || self.cores.is_empty()
+             || self.cores.len() > NODES_MAX
+             || booted.len() != 1
+diff --git a/model/src/check/debug.rs b/model/src/check/debug.rs
+index 7facd2f..e3cce7a 100644
+--- a/model/src/check/debug.rs
++++ b/model/src/check/debug.rs
+@@ -14,14 +14,17 @@ use dodos_abi::{
+ /// 88: a ring whose next sequence is `next` holds each entry of sequence s
+ /// at index (s − 1) mod N, the greatest being next − 1.
+ fn ring_holds(ring: &[TraceEntry], next: u64, entries: u64) -> bool {
++    if next < 1 {
++        return false;
++    }
+     let placed = ring.iter().enumerate().all(|(index, entry)| {
+         entry.seq == 0
+             || (entry.seq < next
+-                && entry.seq + entries >= next
++                && entry.seq.checked_add(entries).is_some_and(|top| top >= next)
+                 && (entry.seq - 1) % entries == index as u64)
+     });
+     let last = next == 1 || ring[((next - 2) % entries) as usize].seq == next - 1;
+-    next >= 1 && placed && last
++    placed && last
+ }
+ 
+ impl Model {
+diff --git a/model/src/check/machine.rs b/model/src/check/machine.rs
+index 97a7f7c..22fe302 100644
+--- a/model/src/check/machine.rs
++++ b/model/src/check/machine.rs
+@@ -147,10 +147,20 @@ impl System {
+             ensure(counted, "G4: a map count is not the leaves of its chunk")?;
+         }
+         for (entry, &held) in entries.iter().enumerate() {
+-            ensure(
+-                held <= table.device_leaves[entry],
+-                "G4: a leaf count below its leaves",
+-            )?;
++            // The count is the leaves of the owner's tables: exact while the
++            // entry's owner runs, as for a chunk (G4).
++            let owner = dodos_abi::Ownership::from_raw(table.devices[entry].owner.raw());
++            let alive = owner.is_some_and(|w| match (w.state(), w.owner()) {
++                (dodos_abi::OwnState::Taken, dodos_abi::Owner::Node(n)) => {
++                    self.has_generation(n, w.generation()) && self.running_node(n)
++                }
++                _ => false,
++            });
++            let counted = match alive {
++                true => held == table.device_leaves[entry],
++                false => held <= table.device_leaves[entry],
++            };
++            ensure(counted, "G4: a leaf count below its leaves")?;
+         }
+         Ok(())
+     }
+diff --git a/model/src/check/sched.rs b/model/src/check/sched.rs
+index fd3e640..bcb6de2 100644
+--- a/model/src/check/sched.rs
++++ b/model/src/check/sched.rs
+@@ -37,7 +37,7 @@ impl Model {
+     /// 47. an armed timer is listed once by its live notify and fires after
+     ///     now; a notify lists only the armed timers that name it.
+     pub(super) fn check_sched(&self) -> Check {
+-        let runs = |thread: &ObjId| Self::runnable_thread(&self.threads[thread]);
++        let runs = |thread: &ObjId| self.threads.get(thread).is_some_and(Self::runnable_thread);
+         let mut entered = BTreeSet::new();
+         let mut sums = vec![0u64; self.width()];
+         for (&id, sched) in &self.scheds {
+diff --git a/model/src/check/table.rs b/model/src/check/table.rs
+index a6cd959..6887cae 100644
+--- a/model/src/check/table.rs
++++ b/model/src/check/table.rs
+@@ -44,7 +44,7 @@ fn judge_write(write: &crate::table::WordWrite) -> Check {
+                     m.state() == dodos_abi::MemberState::Dead || state == 2 && m.generation() != g
+                 }),
+             };
+-            let named = after_owner == writer || after_owner == owner;
++            let named = after_owner == writer || (reserve && after_owner == owner);
+             ensure_write(state != 0 && allowed && named && after_g == write.generation)
+         }
+         // A release or a give: the word was held by the writer; or
+diff --git a/model/src/check/tests.rs b/model/src/check/tests.rs
+index b50aa09..233eed3 100644
+--- a/model/src/check/tests.rs
++++ b/model/src/check/tests.rs
+@@ -2823,3 +2823,95 @@ fn translations_that_overlap_are_reported() {
+     live(&mut model.caps, frame_cap).record = Record::Mapping(mapping);
+     assert_eq!(model.check(), Err("35: translations that overlap"));
+ }
++
++// Verification probes (ver2-D-opus).
++
++/// A take journaled by node 0 with node 1's owner code and node 0's
++/// generation, on a word of node 1 that a generation other than its current
++/// one left: `judge_write` accepts it, though the contract lets node 0 write
++/// only *taken* (0, its generation) (Memory and devices between nodes, "Who
++/// may take a word").
++#[test]
++fn ver2_a_take_journaled_in_the_old_owners_name_is_accepted() {
++    let mut model = state();
++    let (_, chunk) = with_block(&mut model);
++    let g0 = model.table.generation(0);
++    let g1 = model.table.member(1).generation();
++    let before = Ownership::taken(Owner::Node(1), g1.wrapping_add(3)).raw();
++    let after = Ownership::taken(Owner::Node(1), g0).raw();
++    let write = model
++        .table
++        .journal(0, crate::table::Word::Chunk(chunk), before, after);
++    model.table.writes.push(write);
++    eprintln!("g0 {g0} g1 {g1} node 1 {:?}", model.table.member(1).state());
++    assert_eq!(model.check(), Err("52: write of an ownership word"));
++}
++
++/// The same on a word free and unclaimed: `judge_write` accepts a take that
++/// leaves "taken by unclaimed".
++#[test]
++fn ver2_a_take_journaled_in_the_unclaimed_name_is_accepted() {
++    let mut model = state();
++    let (_, chunk) = with_block(&mut model);
++    let g0 = model.table.generation(0);
++    let before = Ownership::free(Owner::Unclaimed).raw();
++    let after = Ownership::taken(Owner::Unclaimed, g0).raw();
++    let write = model
++        .table
++        .journal(0, crate::table::Word::Chunk(chunk), before, after);
++    model.table.writes.push(write);
++    assert_eq!(model.check(), Err("52: write of an ownership word"));
++}
++
++/// A kernel ring whose next sequence is 0, as a generation that wrote
++/// nothing the kernel checks would leave it: `ring_holds` computes
++/// `next - 2` before it reads `next >= 1`, so the check panics instead of
++/// reporting 88.
++#[test]
++fn ver2_a_ring_with_next_sequence_zero_panics_the_checker() {
++    let mut model = state();
++    let core = model.cores[0].number as usize;
++    std::sync::Arc::make_mut(&mut model.table.crash).areas[core].next_kernel = 0;
++    let report = model.check();
++    eprintln!("{report:?}");
++    assert_eq!(report, Err("88: kernel ring"));
++}
++
++/// A kernel ring whose next sequence is `u64::MAX`, with the entry of
++/// `u64::MAX - 1` in place: `entry.seq + entries` overflows, so the check
++/// panics instead of reporting 88.
++#[test]
++fn ver2_a_ring_with_next_sequence_at_the_maximum_panics_the_checker() {
++    let mut model = state();
++    let core = model.cores[0].number as usize;
++    let entries = dodos_abi::TRACE_KERNEL_ENTRIES;
++    let area = &mut std::sync::Arc::make_mut(&mut model.table.crash).areas[core];
++    for entry in area.kernel.iter_mut() {
++        entry.seq = 0;
++    }
++    area.next_kernel = u64::MAX;
++    let index = ((u64::MAX - 1 - 1) % entries) as usize;
++    area.kernel[index].seq = u64::MAX - 1;
++    let report = model.check();
++    eprintln!("{report:?}");
++    assert_eq!(report, Err("88: kernel ring"));
++}
++
++/// A lend whose receiver is no thread of the node, on the context of the
++/// first thread: `check_sched` asks `runs` of the receiver before invariant
++/// 44 asks whether it exists, so the check panics instead of reporting 44.
++#[test]
++fn ver2_a_lend_to_a_missing_receiver_panics_the_checker() {
++    let mut model = state();
++    let first = object(&model, START_SLOT_THREAD);
++    let context = model.threads[&first].home.expect("the first thread's context");
++    let reply = ObjId(u32::MAX / 4);
++    let receiver = ObjId(u32::MAX / 4 + 1);
++    assert!(!model.threads.contains_key(&receiver));
++    model.lends.insert(reply, (context, receiver));
++    live(&mut model.scheds, context).chain.push(reply);
++    live(&mut model.threads, first).suspended = true;
++    let report = model.check();
++    eprintln!("{report:?}");
++    assert!(report.is_err(), "the check reports, it does not panic");
++}
+diff --git a/model/src/debug.rs b/model/src/debug.rs
+index 24f0c9a..61981de 100644
+--- a/model/src/debug.rs
++++ b/model/src/debug.rs
+@@ -88,10 +88,20 @@ impl DebugArea {
+                 TRACE_KERNEL_ENTRIES,
+             ),
+         };
+-        let seq = *next;
++        // A sequence that would pass the last one starts the ring again, so
++        // that a write never fails and never waits (Debugging, "Writing").
++        let (seq, start) = match next.checked_add(1) {
++            Some(after) => (*next, after),
++            None => (1, 2),
++        };
++        if seq == 1 {
++            for entry in ring.iter_mut() {
++                *entry = TraceEntry::default();
++            }
++        }
+         entry.seq = seq;
+         ring[trace_index(seq, entries) as usize] = entry;
+-        *next = seq + 1;
++        *next = start;
+     }
+ }
+ 
+@@ -268,7 +278,19 @@ impl Model {
+             .collect::<Vec<_>>()
+         {
+             let area = &mut std::sync::Arc::make_mut(&mut self.table.crash).areas[core];
+-            if area.magic != DEBUG_AREA_MAGIC || area.version != DEBUG_AREA_VERSION {
++            // The sequences are used only if they are ones the ring can go
++            // on from: at least 1, and the entry the ring holds at that
++            // sequence is the one before it (Debugging, "Across nodes and
++            // generations").
++            let sound = |ring: &[TraceEntry], next: u64, entries: u64| {
++                next >= 1
++                    && (next == 1 || ring[((next - 2) % entries) as usize].seq == next - 1)
++            };
++            if area.magic != DEBUG_AREA_MAGIC
++                || area.version != DEBUG_AREA_VERSION
++                || !sound(&area.kernel, area.next_kernel, TRACE_KERNEL_ENTRIES)
++                || !sound(&area.user, area.next_user, TRACE_USER_ENTRIES)
++            {
+                 *area = DebugArea::new(generation);
+             }
+             (area.generation, area.slot) = (generation, self.node);
+diff --git a/model/src/scenarios/checker.rs b/model/src/scenarios/checker.rs
+index bc489bc..6f12ba7 100644
+--- a/model/src/scenarios/checker.rs
++++ b/model/src/scenarios/checker.rs
+@@ -10,7 +10,7 @@ use crate::cores::{Completes, Flush, Request};
+ use crate::locks::{Cost, LockId, Step};
+ use crate::nodes::HwAction;
+ use crate::table::{FenceStep, GrantState};
+-use dodos_abi::{CHECK_MUL, CoreWord, Member, RoleWord};
++use dodos_abi::{CHECK_MUL, CoreWord, Member, Owner, Ownership, RoleWord};
+ 
+ /// A node of two cores alone.
+ fn node2() -> N {
+@@ -587,3 +587,222 @@ fn a_translation_under_no_grant_is_reported() {
+     let report = m.sys.check().expect_err("spoiled");
+     assert_eq!(report, "node 1: 58: translation under no grant");
+ }
++// Verification probes (ver2-D-opus).
++
++/// The index of a chunk of node 0's free memory, past the floors and the
++/// reserves: the chunk at `ram + 8 chunks`.
++fn free_chunk(m: &S) -> u64 {
++    let geometry = m.sys.canonical().geometry;
++    let ram = crate::boot::Machine::example().memory[4].base;
++    (ram + 8 * geometry.chunk()) >> geometry.chunk_shift()
++}
++
++/// A gate of node 0 writes *taken* with node 1's owner code and node 0's
++/// generation, over a word of a generation of node 1 that is over: the
++/// journal entry `judge_write` accepts (see `check::tests`), and the word.
++/// Node 1, live in that generation, never took the chunk, so the machine
++/// reports the chunk there, as 57, not as 52.
++#[test]
++fn ver2_a_word_taken_in_a_live_nodes_name_is_reported_by_the_victim() {
++    let mut m = S::two();
++    assert_eq!(m.state(1), MemberState::Live);
++    let generation = m.sys.member(0).generation();
++    assert_eq!(m.sys.member(1).generation(), generation);
++    let chunk = free_chunk(&m);
++    let before = m.sys.canonical().owners[chunk as usize];
++    assert_eq!(before, Ownership::free(Owner::Unclaimed).raw());
++    // What the old owner left: a generation of node 1 that is over.
++    let old = Ownership::taken(Owner::Node(1), generation.wrapping_add(7)).raw();
++    m.sys
++        .edit_table(|t| std::sync::Arc::make_mut(&mut t.owners)[chunk as usize] = old);
++    let after = Ownership::taken(Owner::Node(1), generation).raw();
++    let write = m
++        .sys
++        .node(0)
++        .table
++        .journal(0, crate::table::Word::Chunk(chunk), old, after);
++    m.sys.node_mut(0).table.writes.push(write);
++    m.sys
++        .edit_table(|t| std::sync::Arc::make_mut(&mut t.owners)[chunk as usize] = after);
++    let report = m.sys.check();
++    eprintln!("a chunk taken in node 1's name: {report:?}");
++    assert!(
++        matches!(&report, Err(report) if report.contains("52: write of an ownership word")),
++        "{report:?}"
++    );
++}
++
++/// The same in the name of *unclaimed*, with node 0's generation: accepted
++/// by every node of the machine, and harmless, since a word taken by
++/// unclaimed is one any node may take (Memory and devices between nodes,
++/// "Who may take a word", case 2).
++#[test]
++fn ver2_a_word_taken_in_the_unclaimed_name_is_accepted() {
++    let mut m = S::two();
++    let generation = m.sys.member(0).generation();
++    let chunk = free_chunk(&m);
++    let before = m.sys.canonical().owners[chunk as usize];
++    assert_eq!(before, Ownership::free(Owner::Unclaimed).raw());
++    let after = Ownership::taken(Owner::Unclaimed, generation).raw();
++    let write = m
++        .sys
++        .node(0)
++        .table
++        .journal(0, crate::table::Word::Chunk(chunk), before, after);
++    m.sys.node_mut(0).table.writes.push(write);
++    m.sys
++        .edit_table(|t| std::sync::Arc::make_mut(&mut t.owners)[chunk as usize] = after);
++    let report = m.sys.check();
++    eprintln!("a chunk taken in unclaimed's name: {report:?}");
++    assert!(
++        matches!(&report, Err(report) if report.contains("52: write of an ownership word")),
++        "{report:?}"
++    );
++}
++
++/// A device entry whose leaf count stands above the leaves that target it,
++/// on a machine of two running nodes: G4 asks only `held <= count`, so the
++/// state is accepted, and the entry can never return to its pool.
++#[test]
++fn ver2_a_device_leaf_count_above_its_leaves_is_accepted() {
++    let mut m = S::two();
++    // Node 0 takes the entry of the machine's device range at 2 MB.
++    let index = (0..m.sys.node(0).device_count())
++        .find(|&i| m.sys.node(0).device_entry(i).base() == 2 << 20)
++        .expect("the device range of the machine");
++    let take = Syscall::MemoryTake {
++        control: s(dodos_abi::START_SLOT_MEMORY_CONTROL),
++        kind: 1,
++        place: index as u64,
++        size: 0,
++        destination: s(64),
++    };
++    m.ok(0, take);
++    let before = m.sys.canonical().device_leaves[index];
++    assert_eq!(before, 0);
++    // What a faulty gate of node 0 leaves: the count above the leaves.
++    m.sys
++        .edit_table(|t| std::sync::Arc::make_mut(&mut t.device_leaves)[index] += 5);
++    let report = m.sys.check();
++    eprintln!("entry {index} of node 0, leaf count {before}: {report:?}");
++    assert!(
++        matches!(&report, Err(report) if report.ends_with("G4: a leaf count below its leaves")),
++        "{report:?}"
++    );
++}
++
++/// A frame granted to node 1 with `read` only; on node 1 its root remote
++/// capability given `write` and `derive` as well: invariant 3 asks nothing
++/// of a remote root capability's rights, so the machine accepts it, and a
++/// writable mapping of the frame then succeeds.
++#[test]
++fn ver2_rights_of_a_remote_frame_beyond_the_grant_are_accepted() {
++    let mut m = S::two();
++    let reply = m.retype(1, ObjectKind::Reply, 0, 100);
++    m.ok(1, reply);
++    let frame = m.retype(0, ObjectKind::Frame, 1, 101);
++    m.ok(0, frame);
++    let recv = Syscall::Recv {
++        endpoint: s(dodos_abi::START_SLOT_MAILBOX),
++        reply: s(100),
++        range: crate::Range {
++            first: s(110),
++            count: 4,
++        },
++        wait: 0,
++    };
++    assert_eq!(m.call(1, recv), WAITS);
++    let call = Syscall::NodeSend {
++        node: node_cap(1),
++        message: crate::Message {
++            caps: vec![crate::Transfer::Derive(s(101), Rights::READ.bits())],
++            ..crate::Message::default()
++        },
++        doorbell: SlotAddr::NONE,
++    };
++    assert_eq!(m.call(0, call), WAITS);
++    m.settle();
++    assert_eq!(m.woken(0), Some(&Ok(Output::Sent { flags: 0 })));
++    let object = m.sys.node(0).object_at(m.t[0], s(101)).expect("the frame");
++    let root = m.sys.node(0).objects[&object].root;
++    let granted: Vec<(crate::CapId, Rights)> = m
++        .sys
++        .node(0)
++        .caps
++        .iter()
++        .filter(|(_, cap)| cap.object == object)
++        .map(|(&id, cap)| (id, cap.rights))
++        .collect();
++    eprintln!("the frame and its anchor on node 0 hold {granted:?}, its root {root:?}");
++    let anchor = granted
++        .iter()
++        .find(|(id, _)| *id != root)
++        .expect("the anchor of the grant");
++    assert_eq!(anchor.1, Rights::READ, "the rights the grant asks");
++    let remote = m
++        .sys
++        .node(1)
++        .object_at(m.t[1], s(110))
++        .expect("the remote frame");
++    let root = m.sys.node(1).objects[&remote].root;
++    eprintln!(
++        "the root remote capability of node 1 holds {:?}",
++        m.sys.node(1).caps[&root].rights
++    );
++    m.sys.node_mut(1).caps.get_mut(&root).unwrap().rights =
++        Rights::READ.union(Rights::WRITE).union(Rights::DERIVE);
++    assert_eq!(m.sys.check(), Ok(()), "the widened rights are accepted");
++    let map = Syscall::ASpaceMap(crate::Map {
++        space: s(dodos_abi::START_SLOT_ASPACE),
++        frame: s(110),
++        untyped: SlotAddr::NONE,
++        address: 1 << 30,
++        first: 0,
++        count: 1,
++        rights: Rights::READ.union(Rights::WRITE).bits(),
++    });
++    m.ok(1, map);
++    let translated = m.sys.node(1).translated(m.t[1], 1 << 30);
++    eprintln!("the translation of node 1: {translated:?}");
++    assert!(translated.is_some_and(|rights| rights.contains(Rights::WRITE)));
++}
++
++/// A hostile generation of node 1 leaves `u64::MAX` as the next kernel
++/// sequence of the debug area of its core, with the magic and the version
++/// intact; node 1 is killed, dies, and a fresh generation starts on that
++/// core. The fresh start panics.
++#[test]
++fn ver2_a_fresh_start_adopts_the_sequences_a_dead_generation_left() {
++    let mut m = S::two();
++    let stop = Syscall::NodeStop {
++        node: node_cap(1),
++        mode: dodos_abi::NODE_STOP_KILL,
++        core: 0,
++    };
++    m.ok(0, stop);
++    m.settle();
++    m.run(7 * MS);
++    assert_eq!(m.state(1), MemberState::Dead);
++    m.sys.edit_table(|t| {
++        std::sync::Arc::make_mut(&mut t.crash).areas[1].next_kernel = u64::MAX;
++    });
++    let start = Syscall::NodeStart {
++        node: node_cap(1),
++        mode: dodos_abi::NODE_START_FRESH,
++        image: 0,
++        module: 0,
++        window: 0,
++        mask: 0b10,
++    };
++    let _ = m.sys.apply(0, m.t[0], start);
++    let to = m.sys.now() + 2 * MS;
++    while m.sys.now() < to {
++        let at = m.sys.now() + 100_000;
++        m.sys.advance(at);
++    }
++    let next = m.sys.canonical().crash.areas[1].next_kernel;
++    eprintln!("after the fresh start: node 1 {:?}, next kernel {next}", m.state(1));
++    assert_eq!(m.state(1), MemberState::Live);
++    assert!(next >= 1 && next < u64::MAX);
++    assert_eq!(m.sys.check(), Ok(()), "the new generation's state");
++}
+diff --git a/model/tests/ver2_probe.rs b/model/tests/ver2_probe.rs
+new file mode 100644
+index 0000000..e92f5c2
+--- /dev/null
++++ b/model/tests/ver2_probe.rs
+@@ -0,0 +1,62 @@
++//! Verification probes (ver2-D-opus). Every test here is written by the
++//! verifier and reaches its state by the calls a boot image or a user can
++//! make.
++
++mod common;
++
++use dodos_abi::*;
++use dodos_model::*;
++
++fn s(index: u32) -> SlotAddr {
++    SlotAddr::own(common::slot(index))
++}
++
++/// The machine of `Machine::example` with the iospace width the boot image
++/// asks for, booted, its device range taken and an `iospace` retyped in
++/// slot 30.
++fn iospace_on(width: u32) -> (Model, ObjId, Outcome) {
++    let mut machine = Machine::example();
++    machine.io_width = width;
++    let (mut m, t) = Model::boot(&machine).expect("the start-up takes any io_width");
++    common::take_device(&mut m, t);
++    let call = Syscall::UntypedRetype {
++        untyped: s(20),
++        kind: ObjectKind::IoSpace,
++        size: 0,
++        page: 0,
++        memory: 0,
++        destination: s(30),
++    };
++    let mut out = m.apply_settled(t, call.clone());
++    for _ in 0..1000 {
++        if out != Err(Error::Again) {
++            break;
++        }
++        out = m.apply_settled(t, call.clone());
++    }
++    (m, t, out)
++}
++
++/// The start-up checks read no `io_width`: a width of 8, of 64, of 125 and
++/// of 130 all boot, where the geometry's values are refused
++/// (`Machine::layout`).
++#[test]
++fn the_start_up_accepts_any_io_width() {
++    for width in [8, 64, 125, 130] {
++        let mut machine = Machine::example();
++        machine.io_width = width;
++        let booted = Model::boot(&machine);
++        eprintln!("io_width {width}: boot {:?}", booted.is_err());
++        assert!(booted.is_err(), "the start-up takes io_width {width}");
++    }
++    for width in [39, 48, 57, 63] {
++        let mut machine = Machine::example();
++        machine.io_width = width;
++        assert!(Model::boot(&machine).is_ok(), "the start-up refuses {width}");
++    }
++}
++
++// The panics of the check and of `iospace_map` on a width outside
++// [page shift, 64] were run before the start-up refused it; the report of
++// the verifier keeps their output (check/memory.rs:110, :113, memory.rs:377,
++// :421).

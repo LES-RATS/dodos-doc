@@ -1,0 +1,155 @@
+diff --git a/model/src/check.rs b/model/src/check.rs
+index da4fdd0..7d32a9f 100644
+--- a/model/src/check.rs
++++ b/model/src/check.rs
+@@ -708,6 +708,17 @@ impl Model {
+         };
+         let waiting = self.threads.values().filter(in_queue).count();
+         ensure(waiting == entries, "14: a waiting thread not queued")?;
++        // VER2-D8: a thread that waits on a unit request is the waiter of
++        // that entry of the unit request table.
++        for (&id, thread) in &self.threads {
++            if let Wait::Unit(index) = thread.wait {
++                let entry = self.unit_requests.get(index).and_then(Option::as_ref);
++                let waits = entry.is_some_and(|e| {
++                    matches!(e.waiter, crate::units::Waiter::Thread(Some(t)) if t == id)
++                });
++                ensure(waits, "14: a wait on no unit request")?;
++            }
++        }
+ 
+         // A range in a destroyed space is no longer within any table.
+         let within = |window: &Window| {
+diff --git a/model/src/check/debug.rs b/model/src/check/debug.rs
+index 7facd2f..6726161 100644
+--- a/model/src/check/debug.rs
++++ b/model/src/check/debug.rs
+@@ -20,8 +20,9 @@ fn ring_holds(ring: &[TraceEntry], next: u64, entries: u64) -> bool {
+                 && entry.seq + entries >= next
+                 && (entry.seq - 1) % entries == index as u64)
+     });
+-    let last = next == 1 || ring[((next - 2) % entries) as usize].seq == next - 1;
+-    next >= 1 && placed && last
++    next >= 1
++        && placed
++        && (next == 1 || ring[((next - 2) % entries) as usize].seq == next - 1)
+ }
+ 
+ impl Model {
+diff --git a/model/src/check/memory.rs b/model/src/check/memory.rs
+index 2350f64..9e48eff 100644
+--- a/model/src/check/memory.rs
++++ b/model/src/check/memory.rs
+@@ -163,6 +163,20 @@ impl Model {
+                 "39: domain numbers of a unit",
+             )?;
+         }
++        // VER2-D3: a domain number lies in this node's range on each unit of
++        // its iospace, and no two iospaces of one unit share one.
++        let mut taken = BTreeSet::new();
++        for (space, &domain) in &self.domains {
++            let units = &self.aspaces[space].units;
++            ensure(!units.is_empty(), "39: domain number of an iospace on no unit")?;
++            for &unit in units {
++                ensure(
++                    self.domain_range(unit, self.node).contains(&domain),
++                    "39: domain number outside the node's range",
++                )?;
++                ensure(taken.insert((unit, domain)), "39: domain number shared")?;
++            }
++        }
+         Ok(())
+     }
+ }
+diff --git a/model/src/check/sched.rs b/model/src/check/sched.rs
+index fd3e640..66c6637 100644
+--- a/model/src/check/sched.rs
++++ b/model/src/check/sched.rs
+@@ -37,7 +37,7 @@ impl Model {
+     /// 47. an armed timer is listed once by its live notify and fires after
+     ///     now; a notify lists only the armed timers that name it.
+     pub(super) fn check_sched(&self) -> Check {
+-        let runs = |thread: &ObjId| Self::runnable_thread(&self.threads[thread]);
++        let runs = |thread: &ObjId| self.threads.get(thread).is_some_and(Self::runnable_thread);
+         let mut entered = BTreeSet::new();
+         let mut sums = vec![0u64; self.width()];
+         for (&id, sched) in &self.scheds {
+@@ -168,6 +168,17 @@ impl Model {
+                     "46: address space of the running thread",
+                 )?;
+             }
++            // VER2-D1: the thread a core runs holds its running context.
++            let holder = core.running.and_then(|(context, _)| self.holder(context));
++            ensure(pending || core.thread == holder, "46: thread of the running context")?;
++            // VER2-D2: the root a core loaded is that of the thread it runs
++            // (G7, `load_root`).
++            let space = core
++                .thread
++                .and_then(|t| self.threads.get(&t))
++                .and_then(|t| t.aspace)
++                .filter(|&a| !self.dying(a));
++            ensure(pending || core.loaded == space, "G7: root a core loaded")?;
+         }
+         Ok(())
+     }
+diff --git a/model/src/check/tasks.rs b/model/src/check/tasks.rs
+index 4371271..8a7d606 100644
+--- a/model/src/check/tasks.rs
++++ b/model/src/check/tasks.rs
+@@ -52,7 +52,7 @@ impl Model {
+                 "50: running thread of a revoked task",
+             )?;
+         }
+-        ensure(true, "50: running thread of a revoked task")
++        Ok(())
+     }
+ 
+     /// Interrupts:
+diff --git a/model/src/rings.rs b/model/src/rings.rs
+index 7e9a032..00be226 100644
+--- a/model/src/rings.rs
++++ b/model/src/rings.rs
+@@ -373,10 +373,11 @@ impl Model {
+     /// The one check on every message received (D-124, D-129, D-131), in
+     /// one function and before anything changes. `None` passes; `Some`
+     /// names what it named, for the trace (code 11).
+-    pub(crate) fn refused(&self, message: &Message) -> Option<u64> {
++    pub(crate) fn refused(&self, from: u16, message: &Message) -> Option<u64> {
+         let header = &message.header;
+         let sender = header.sender;
+-        if sender >= self.table.nodes {
++        // The sender it names is the node whose ring it came on (VER2-A1).
++        if sender != from || sender >= self.table.nodes {
+             return Some(0);
+         }
+         // The sender's member word is starting, live, sealing or sealed
+@@ -512,7 +513,7 @@ impl Model {
+             self.set_consumed(from, user, consumed + length);
+             served += 1;
+             match message {
+-                Some(message) => match self.refused(&message) {
++                Some(message) => match self.refused(from, &message) {
+                     None => self.receive_message(message),
+                     Some(named) => {
+                         self.refused.0 += 1;
+diff --git a/model/src/scenarios/crossing.rs b/model/src/scenarios/crossing.rs
+index 5db717b..8b831a9 100644
+--- a/model/src/scenarios/crossing.rs
++++ b/model/src/scenarios/crossing.rs
+@@ -576,12 +576,12 @@ fn a_handed_that_does_not_name_the_current_epoch_the_holder_and_this_node_as_tar
+             Body::Handed { role: 0, epoch },
+         )
+     };
+-    assert_eq!(k.m.refused(&handed(1, 5)), None);
+-    assert!(k.m.refused(&handed(1, 6)).is_some());
+-    assert!(k.m.refused(&handed(2, 5)).is_some());
++    assert_eq!(k.m.refused(1, &handed(1, 5)), None);
++    assert!(k.m.refused(1, &handed(1, 6)).is_some());
++    assert!(k.m.refused(2, &handed(2, 5)).is_some());
+     // A word that does not name this node as target.
+     k.m.table.roles[0] = dodos_abi::RoleWord::handing(1, 2, 5);
+-    assert!(k.m.refused(&handed(1, 5)).is_some());
++    assert!(k.m.refused(1, &handed(1, 5)).is_some());
+ }
+ 
+ #[test]
