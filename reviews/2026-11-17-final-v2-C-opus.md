@@ -311,9 +311,29 @@ Proof: `spoof::c7_a_send_forged_by_a_third_node_carries_another_nodes_task`:
 C7: node 0's receiver woke with Some(Ok(Message(Delivery { received: Received { header: Header(4294967303), badge: 0, marks: Marks(0), task: 281474976710657 }, words: [42] })))
 ```
 
-(281474976710657 = node 1, counter 1.) The same path, not run: a
-`UnitRequest` naming another requester (a detach of that node's device,
-which D-140 ties to its requester), a `Revoke` that removes another holder's
+(281474976710657 = node 1, counter 1.)
+
+Attack C (another node's device detached, the case D-140 meant to close):
+1. Three nodes; node 1 holds the IOMMU role; node 0 attaches its device
+   through node 1 (context entry owned by node 0).
+2. Node 2 reads the device's domain number and the role's epoch in the
+   machine table and writes, in its own ring 2 -> 1, a `UnitRequest`
+   `Detach { device, domain, root: 0 }` whose header names node 0 (any
+   request credit index and serial: a `UnitRequest` names no credit of the
+   receiver).
+3. Node 1's gate judges the operands for node 0 (`operands_allowed` with
+   `from` = node 0, `units.rs:529-530`): the identifier word and the
+   context entry name node 0, so it clears the entry.
+
+Proof: `spoof::c11_a_detach_forged_by_a_third_node_clears_another_nodes_context_entry`:
+
+```
+C11: context entry before: Some((0, 1))
+C11: refused by node 1: 0
+C11: context entry after: None
+```
+
+The same path, not run: a `Revoke` that removes another holder's
 remote capability, a `Handed` or `ReportAsk` that claims to come from the
 role's holder, and an answer to another node's credit (the credit serials
 are sequential, `rings.rs:324`, so guessable). The checker accepted every
@@ -472,18 +492,30 @@ Attack:
 3. Node 2 asks again, and again.
 
 Proof: `spoof::c10_a_report_whose_next_key_does_not_advance_stalls_the_rebuild_for_ever`
-(it fires one event at a time, rewrites node 0's ring after each, and moves
-the clock only to the next timer due). In the model, a kernel message and
-its answer take no time, so node 2's recovery reserve makes progress at
-the same instant for ever and the model's own bound fires:
+(marked `#[should_panic(expected = "the reserve makes progress for
+ever")]`; it fires one event at a time, rewrites node 0's ring after each,
+moves the clock only to the next timer due, and runs the whole check every
+1,000 events). In the model a kernel message and its answer take no time,
+so node 2's recovery reserve makes progress at the same instant for ever
+and the model's own bound fires. Output (44 s; I kept only some of the
+progress lines, which the test prints every 1,000 events):
 
 ```
-panicked at model/src/nodes.rs:1974:9:
-the reserve makes progress for ever
+C10: 1000 events, now 2000000 ns, 236 reports rewritten, rebuilding true
+C10: 10000 events, now 2000000 ns, 4736 reports rewritten, rebuilding true
+C10: 100000 events, now 2000000 ns, 49736 reports rewritten, rebuilding true
+C10: 199000 events, now 2000000 ns, 99236 reports rewritten, rebuilding true
+thread '...c10_a_report_whose_next_key_does_not_advance_stalls_the_rebuild_for_ever' panicked at model/src/nodes.rs:1974:9:
+ok
+test result: ok. 1 passed; 0 failed; ...
 ```
 
-An earlier variant that injected the forged answers itself panicked the
-same way. In a real machine the round trip takes time, so the rebuild
+(The panic message, "the reserve makes progress for ever", is what
+`should_panic` matched; I saw it in full in the run before, without
+`should_panic`.)
+
+The check passed at every sample: no invariant sees a rebuild that does
+not advance. In a real machine the round trip takes time, so the rebuild
 does not stop the node: it just never ends, for as long as node 0 answers.
 Fix direction: a `Report` whose next key is not above the key asked (or
 that is not `REPORT_END`) ends that node's report, and is traced.
@@ -497,3 +529,168 @@ Other functions of roles.rs read and found sound: `role_of`,
 device), `serve_kept`, `items`, `report_asked` (the role index is checked
 by `refused` before it indexes `role_records`).
 
+---
+
+## system.rs
+
+No finding proved. `System` is the machine's simulator (hardware, park and
+entry stubs, the scheduler of events); its inputs are the tests'.
+Read: `Rng::next`, `Rng::below` (`n.max(1)`), `boot`, `models`,
+`canonical`, `node`, `has`, `table`, `member`, `role`, `core_word`,
+`park_request`, `hardware`, `now`, `actions`, `model`, `share`, `after`,
+`apply`, `events`, `fire`, `step`, `settle` (bounded), `advance`, `run`,
+`move_clock`, `set_clock`, `hang`, `late_wake`, `stub_stop`,
+`set_window`, `set_vmx`, `fail`, `inject_raw`, `inject`, `break_unit`,
+`act`, `interrupt`, `write_parked`, `fence_record`, `stop`, `park`,
+`wake`, `entry_step`, `marked`, `enter_if_named`, `enter`, `node_mut`,
+`push_action`, `edit_table`.
+
+What matters for the attackers: the entry stub enters a core only if its
+word is not marked and names a node starting or live with the word's
+generation (`system.rs:766-770`), so a start request written by another
+node only wakes a core for its rightful owner. The x86-64 stop is a no-op
+on an unmarked word (`system.rs:601-610`). I found no path by which a
+hostile node's writes make the simulator enter a core into the wrong node.
+See the note on `System::enter` under nodes.rs.
+
+---
+
+## units.rs
+
+### Finding 8. Domain numbers are cut to 16 bits: on a unit of more than 65,536 domains two node slots share numbers (hardening)
+
+Attacker: the machine description (the domain count of a unit), which no
+start-up check bounds above.
+
+`model/src/units.rs:238-245`:
+
+```rust
+let total = self.machine.iommus[unit].domains;
+let per = total.saturating_sub(2) / u32::from(self.table.nodes.max(1));
+let first = 1 + u32::from(slot) * per;
+...
+(first as u16)..=((first + per - 1) as u16)
+```
+
+`IommuUnit::domains` is a `u32` (`boot.rs:64`); `layout` checks only that
+each slot gets at least one (`boot.rs:655-658`). Above 2^16 + 2 domains the
+casts wrap and the ranges of two slots overlap, so `operands_allowed`
+(`units.rs:263-264`) lets one node attach a device under a domain number of
+another node.
+
+Proof: `spoof::c12_domain_ranges_wrap_past_16_bits` (2^17 domains, two
+slots): `C12: slot 0 1..=65535, slot 1 0..=65534`. Slot 1's range also
+holds 0, which the comment says "is never used".
+
+### Note (not run): the unit service table is keyed by any credit index
+
+`unit_requested` keeps a served request under `(from, index)` with the
+index the requester's header names (`units.rs:547-555`), checked only
+against `CREDIT_NONE` (abi `ring.rs:225-232`). A request credit is 0 to 15
+(`rings.rs:218-220`); a hostile requester can use 16 to 30 as well, so a
+per-peer service table sized for the 16 request credits would overflow in
+a kernel that copies this. With finding 5 the requester can also name any
+`from`, so it can fill the entries of every peer. Not run; the model's map
+has no size.
+
+Functions of units.rs read and found sound apart from the above and from
+the reach of finding 5 into `unit_requested`: `unit_role`, `ioapic_role`,
+`unit_failed`, `unit_request`, `unit_request_with`, `segment_roles`,
+`next_unit`, `operands_allowed` (each operation judged against words the
+requester's own gate wrote; sound for a true sender), `unit_send_queued`,
+`serves_role`, `submit`, `submit_for`, `confirmed`, `unit_answered`
+(credit checked by `refused`), `unit_complete`, `forget_unit_waiter`,
+`unit_step`, `detach_confirmed`, `unit_deadline`, `unit_work`,
+`fail_unit`, `unit_r0`.
+
+---
+
+## grants.rs: functions read
+
+`anchor_index`, `sent`, `build_kernel_space`, `valid`, `anchor`,
+`grant_of`, `free_grant`, `free_with_anchor`, `grantee_over`, `node_send`
+(checks in order: capability and rights, own node, live target, doorbell,
+header, list, sends in flight, ring room, free grant entries; the effect
+comes after every check), `stamp_of`, `make_grant`, `send_received`,
+`place_remote`, `send_answered`, `forget_sender`, `grant_signal`,
+`signal_received`, `undoorbell_one`, `revoke_anchor`, `revoke_received`
+(indexes `uses[me][&use_index]`, which panics on a missing entry, but
+`refused` checked that the entry exists in the same event),
+`revoke_answered`, `wake_remover`, `remote_destroyed`, `release_received`.
+
+Sound for a true sender. Each of `release_received`, `signal_received`,
+`revoke_received`, `send_received` and `send_answered` trusts the sender
+that `refused` judged, so finding 5 reaches all of them; `send_received`
+also trusts the frame (finding 4).
+
+Notes, not run: the grant serial is 30 bits (`grants.rs:115`,
+`nodes.rs:1435`) and the credit serial 27 bits (`rings.rs:324`, abi
+`ring.rs:40`); both wrap with no invariant against a stale serial matching
+again. The credit serial is sequential and starts again at 0 at every R0
+(`nodes.rs:1015`), so an answer's serial is easy to guess (it matters only
+with finding 5).
+
+## rings.rs: functions read
+
+`Item::key`, `Body::kind`, `Body::words`, `Body::entries`, `Peer::new`,
+`Peer::free`, `Peer::sends`, `ring_of`, `consumed`, `ring_room`,
+`write_message`, `credit_in_use`, `take_credit` (indexes
+`credits[index]`, `index` < 31 by the header's 5 bits and the vector has
+24 entries, but `refused` checked `credit_in_use` with `get` first),
+`refused`, `consume`, `set_consumed`, `consumes`, `serve_user_rings`,
+`serve_kernel_rings` (bounded by `units`), `has_kernel_message`,
+`rings_waiting`, `receive_message`, `send_pending` (bounded by
+`PENDING_STEP`), `ring_watch`, `ring_consumed`, `skip_rings`.
+
+`consume` takes the message length from the header (`m.header.length`,
+checked by `readable` to be at most `available` and
+`RING_MESSAGE_ENTRIES_MAX`), not from the body; in the model the body is a
+Rust value, so a header length that disagrees with the body only skips
+entries. The real kernel decodes the body from those entries; I could not
+test a body longer than its header says, because the model has no byte
+form of a message.
+
+---
+
+## Summary, ranked
+
+| # | Severity | Attacker | Where | Proved |
+|---|---|---|---|---|
+| 5 | exploitable | hostile kernel | `rings.rs:376-401`, `612`: sender taken from the header, never compared with the ring | yes: c6 (grant freed), c7 (task identity), c11 (another node's device detached) |
+| 4 | exploitable | hostile kernel (granting node) | `grants.rs:430-486` with `rings.rs:458-461`: the holder maps the frame, rights and page size the `Send` carries | yes: c8 (node 0 maps its own floor read-write; check passes) |
+| 7 | likely exploitable | hostile kernel (asked node) | `roles.rs:678-684`: a `Report` key that does not advance | yes: c10 (100,000 asks at one instant; model's bound panics) |
+| 6 | likely exploitable | hostile kernel (sender) | `rings.rs:503`: `produced - consumed` after a wrapping resync | yes: c9 (panic) |
+| 1 | hardening | boot image | `boot.rs:1218-1222`: writable segments larger than the first untyped | yes: c1 (panic) |
+| 2 | hardening | boot image, machine values | `boot.rs:424`, `434`, `791-799` | yes: c2, c3, c5 (panics) |
+| 3 | hardening | loader values | crash, kept, image, feedback ranges never checked; no alignment invariant | yes: c4 (accepted, check passes) |
+| 8 | hardening | machine values | `units.rs:238-245`: domain numbers cut to 16 bits | yes: c12 |
+
+The two exploitable findings share one cause: the receiver of a message
+believes what the message says about where it came from and what it
+grants. Neither is seen by the checker: every proof runs the whole check
+after each step and it stays `Ok`.
+
+## Not examined
+
+- Files outside the lot were read only where my files call them:
+  `table.rs` (grant and use entries, rings), `memory.rs` (the count of a
+  remote frame's leaves, `attach_key`), `check/table.rs` (invariant 58),
+  `locks.rs` (`Measured`), `sched.rs` (`next_timer`), abi `ring.rs` and
+  `machine.rs` (floors, BootNodes, credits, ring arithmetic). I did not
+  review them.
+- Finding 5's other reaches (a forged `Revoke`, `Handed`, `ReportAsk`, or
+  answer to another node's credit) were read, not run.
+- The resume path of `cores.rs` with a request in flight (see cores.rs).
+- Real concurrency (the model runs each event alone, by design).
+- The real byte encoding of ring messages: the model's ring holds Rust
+  values, so no test of a body that disagrees with its header was
+  possible.
+
+## How to rerun
+
+Copy `model/src/scenarios/v2c.rs` from
+`/private/tmp/dodos-pr3-v2-C-opus` into a clean clone, add `mod v2c;` to
+`model/src/scenarios/mod.rs`, then run the command at the top. `c10` takes
+about 45 s; the others take under 3 s each.
+
+Final run of all twelve tests together: `test result: ok. 12 passed; 0 failed; ... finished in 31.69s`.
