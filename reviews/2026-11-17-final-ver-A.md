@@ -45,7 +45,7 @@ H6). Where a reviewer's claim is wrong in detail I say so in place.
 
 ## H1 — `EC_SME` ignores the ISS bits. Real, high.
 
-`abi/src/aarch64.rs:75-77` and `:197` (`EC_SME => Feature(SME)` inside
+`abi/src/aarch64.rs:76-77` and `:197` (`EC_SME => Feature(SME)` inside
 `class_use`), reached through `exception_use` at `:177-183`. The doc comment of
 `EC_SME` itself says the class covers both "SME trapped by `CPACR_EL1.SMEN` (or
 `CPTR_EL2`, `CPTR_EL3`)" and "an instruction illegal for `PSTATE.SM` or
@@ -64,7 +64,7 @@ h1_an_instruction_illegal_for_the_streaming_state_is_undefined ... FAILED
   left: Some(Feature(1))   right: Some(Fault(Undefined))
 ```
 
-(`Feature(1)` is SME, `Feature(2)` is `SME2_ZT0`; `abi/src/aarch64.rs:8-14`
+(`Feature(1)` is SME, `Feature(2)` is `SME2_ZT0`; `abi/src/aarch64.rs:8-13`
 lists `SME2_ZT0` as a state feature, "ZT0 of SME2".)
 
 Why it is real and not the contract's fault: the contract gives the answer for
@@ -133,7 +133,7 @@ which the comment "they differ, since x ≥ deadline" rules out.
 
 Reachability: none from the model. `model/src/sched.rs:1061-1063` refuses
 `deadline >= TIME_LIMIT` with `Error::Invalid` before the call, and the
-contract fixes it: `kernel-interface.md:498`: "Every instant and every duration given to a
+contract fixes it (`kernel-interface.md:498`): "Every instant and every duration given to a
 call is in nanoseconds and must be below 2^63 (`invalid` otherwise, judged with
 the plain arguments), with one exception: the tolerance of `timer_set`, which
 is any word". So the model does what the contract
@@ -188,8 +188,8 @@ a Kani proof (`#[cfg(kani)]`)." The proofs that exist are
 `abi/src/debug.rs:243` and `abi/src/machine.rs:1458, 1480, 1513`. What they
 cover, from the function names: `Header`, `SlotAddr`, `mapping_range`,
 `firing_instant`, `bandwidth`, `IrqSource`, `NodeMessage`, `trace_index`,
-`FeatureMask`, `Member`/`Ownership`/`DeviceEntry`-beside functions, the two
-architecture class tables. So these pure functions of `abi/` have none, which
+`FeatureMask`, `AttachWord`, `PageClass`, `Ownership`, `Member`, the ring
+indices, and the two architecture class tables. So these pure functions of `abi/` have none, which
 I checked one by one: `Geometry::bytes, page, chunk_shift, chunk, sizes,
 address_bits, root_entry, canonical, valid` (`abi/src/lib.rs:425-521`),
 `Rights`, `Marks`, `PageSize::from_raw`, `MemoryType::for_memory`,
@@ -273,8 +273,8 @@ thread.
 
 Correction: one clause in that paragraph — "on x86-64 a `LEN` field that is
 not 0 with a `R/W` field of `0b00` is `invalid`" — and, in `dr7_valid`, a third
-loop refusing `word >> (16 + 4 * n) & 0b11 == 0 && word >> (18 + 4 * n) & 0b11
-!= 0`. Test that fails without it: a row in
+loop refusing `word >> (18 + 4 * n) & 0b11 == 0 && word >> (16 + 4 * n) & 0b11
+!= 0` (R/W zero, `LEN` not zero). Test that fails without it: a row in
 `x86_64_values_have_their_numbers` with `assert!(!dr7_valid(1 | 0b11 << 16))`.
 
 ## H9 — `CoreWord::from_raw` and `RoleWord::from_raw`. Intended, no severity.
@@ -305,9 +305,8 @@ padding and changed no size. Reproduced:
 `h10_start_machine_was_already_ninety_six_bytes_before_the_retired_words`
 passes, asserting `size_of::<StartMachine>() == 96`, that the fields without
 the last are 92, and that `92.next_multiple_of(8) == 96`. The other two
-numbers are right by the same arithmetic (88 at layout 3, 80 at layout 1:
-`kernel-interface.md`'s `START_MACHINE_LAYOUT` history at
-`abi/src/start.rs:384-387`). The comment is about sizes and its sizes are
+numbers are right by the same arithmetic — 88 at layout 3 and 80 at layout 1,
+as the `START_MACHINE_LAYOUT` history says (`abi/src/start.rs:384-387`). The comment is about sizes and its sizes are
 correct; nothing to correct.
 
 ## M1 — `Geometry::valid` panics instead of refusing, and `Model::boot` reaches it. Real, high.
@@ -326,9 +325,9 @@ where `s: [u8; 4]` and `per_level: u8`. Reproduced twice:
   returning `Err(Refusal::MachineValues)` — `Machine::layout` validates first
   (`model/src/boot.rs:631-637`) in order to refuse it.
 
-This is the difference between the reviewer's finding and mine only in reach:
-M1 said the model "calls it first on the boot geometry, so the input reaches
-it unvalidated"; that is right and now shown. A validator that panics on an
+What my reproduction adds to the reviewer's finding is the reach it asserted
+and did not show: M1 wrote that the model "calls it first on the boot geometry
+(`model/src/boot.rs:631`), so the input reaches it unvalidated", and it does. A validator that panics on an
 input it exists to refuse is the defect; in a release build the add wraps and
 `sizes` comes out false, so the damage is to the build `verify` runs.
 
@@ -394,7 +393,8 @@ Correction: the precondition on `page`, `chunk_shift`, `chunk`, `address_bits`,
 accepts.` — and one Kani proof in `abi/src/lib.rs`'s proofs module,
 `kani::assume(g.valid());` then `assert!(g.page() >= 4096)` and
 `assert!(g.root_entry() * 2 <= 1 << (g.address_bits() - 1))`, which fails
-today for want of the assumption. Test that fails without the change: that
+today — with no assumption it meets the panic of M1 at once, and with the
+assumption it pins the two facts. Test that fails without the change: that
 proof; the four `catch_unwind`s of my probe stay as documentation.
 
 ## M5 — `abort_use` drops the two permission faults of levels −1 and −2. Real, medium.
@@ -457,7 +457,7 @@ reachable: M1's is, through `Model::boot` → `Machine::layout` →
 `Geometry::valid`, and M2's is not, because `Refusal::SegmentPlace` refuses a
 length above the user range first — the same reviewer graded both "should be
 fixed" and neither report ran either, while running one tells the two apart.
-And a third: the six defects of this lot survive the whole verification
+And a third: every defect of this lot survives the whole verification
 command. `nix develop -c ./verify` is green at head, and every one of my
 probes fails beside it; no test in `abi/tests/review6.rs` or `abi/src/tests.rs`
 builds a geometry or a length that the contract's own refusals name. A lot
