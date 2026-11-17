@@ -1,8 +1,7 @@
 # Verification of the two reviews of lot C
 
 Model: PR 3 of `dodos-kernel`, head `6312868`, copied to
-`/private/tmp/dodos-pr3-C-ver` (`/private/tmp/dodos-pr3-ver-C` on this
-machine) and changed there only. Contract:
+`/private/tmp/dodos-pr3-ver-C` and changed there only. Contract:
 `Docs/architecture/kernel-interface.md`; decisions in `Docs/decisions/`.
 
 What I ran, in that copy: two new test modules, `boot::ver_c` inside
@@ -493,6 +492,48 @@ trivial.
 
 ---
 
+## `model/src/units.rs`
+
+### H16 — the operands of an operation, and the unit kind: **real** (the
+generation half), the contract's fault (the rest), minor
+
+`operands_allowed` (`units.rs:252-290`) has one path for an operation and
+one for an operation whose operands are masked, and the masked path
+judges the operands' words without checking that the generation they
+carry is the reporting node's current one. It is the check behind both
+`unit_request` (`units.rs:530`) and `role_take` (`roles.rs:538`).
+
+Run: `ver_c_masked_operands_of_another_generation_are_refused` sends a
+masked redirection whose words belong to a dead node's generation and
+prints `allowed true`; the operation is accepted. So a holder applies an
+operation that a node of an ended generation wrote, which is the fault
+the contract's R1 exists to clear.
+
+Not run, the other two parts of the finding, because the contract does
+not decide them: which unit kinds admit which operation, and whether a
+holder refuses an operation of another unit kind's device. The contract
+lists the kinds and their modes (Interrupts, the remapping entry) without
+saying which operations each admits, so the model's unrestricted reading
+cannot be called wrong. Those two belong in the contract first.
+
+Correction: in `operands_allowed`, judge the generation of the word the
+operands are read from in the masked path as the unmasked path does (or
+take the requester's generation as a parameter and compare it there); the
+test above is the test that fails without it. Severity: minor.
+
+### O20 — `confirmed` clears a submission of the same instant: **real**, minor
+
+`confirmed` (`units.rs:490-505`) drops a submission of the role when
+`serial` matches, and it is called from `unit_step` with the serial of
+the queue's oldest entry. A submission recorded in the same step
+(`unit_requested` stores it, `units.rs:520-535`) has an instant equal to
+the check's, so a submission that has asked the unit nothing and a
+confirmation for another submission of the same role can be matched on a
+serial that only orders them within the step. Read only: I did not build
+the two-submission scenario. Correction: confirm only a submission whose
+instant is before the current check's, and compare the queue's position
+as well as the serial. Severity: minor.
+
 ## `model/src/roles.rs`
 
 ### H11 — a rebuild deletes a resumed node's entries: **real**, fix
@@ -684,7 +725,7 @@ core rests in a state no event leaves. Severity: minor.
 
 ## What both missed
 
-Two things my reproductions turned up. First, the start-up page is short
+Three things my reproductions turned up that neither report states. First, the start-up page is short
 by 16 bytes, not 24: the entry `FirmwareTables` is budgeted 8 bytes
 (`boot.rs:574`) for a table the model never lists, so the two stale
 record sizes and this placeholder partly cancel, and a correction that

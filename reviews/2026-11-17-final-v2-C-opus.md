@@ -366,3 +366,134 @@ reference, does not say so, and a kernel that copies `-` with overflow
 checks (or `debug_assert`) falls over. Fix: `wrapping_sub` at
 `rings.rs:503`, as at `rings.rs:535`.
 
+---
+
+## irq.rs
+
+No finding proved. Read: `irq_claim`, `irq_bind`, `unmask_line`,
+`irq_ack`, `line_target`, `interrupt`, `interrupt_on`, `line_masked`,
+`signal_bits`, `unbind_irq`, `unbind_one_irq`, `irq_removal`, `handle_of`,
+`msi_removal`, `line_remap_removal`, `handle_asking`, `line_asking`,
+`irq_destroyed`.
+
+Notes from reading, not run:
+
+- The handle `core × 192 + (vector − 48)` is cast to `u16`
+  (`irq.rs:79`, `148`, `292`, `435`). With remapping the core is below 341,
+  so the handle fits; without remapping the APIC ID must be at most 255 and
+  a core's number is at most its APIC ID only if the hardware identifiers
+  are distinct. `boot.rs` never checks that they are (the core list is only
+  sorted, `boot.rs:454-458`), so two cores with one APIC ID would make every
+  later core number larger than its identifier. Firmware gives the APIC
+  IDs; hardening only.
+- `irq_claim` of an MSI does not tie the source's requester identifier to a
+  device this node attached; the remapping entry it writes is for this
+  node's own core and vector, so I found no gain for the caller.
+- `served` and `ioapic_role` compute `first_gsi + inputs` in `u32`
+  (`irq.rs:38`, `units.rs:125`); the boot values are not checked against
+  overflow (same family as finding 2).
+
+---
+
+## nodes.rs
+
+No finding proved in this file itself; its message handlers are reached
+through finding 5. Read: `node_of`, `others_live`, `node_start` (window
+checked against `CORE_WINDOWS` before `64 × window`, `nodes.rs:142-147`),
+`first_service_module`, `node_stop`, `node_status`, `own_core`,
+`node_idle`, `node_perf`, `node_watch`, `accuse`, `accuse_self`,
+`park_all`, `observe_watched`, `unwatch_one`, `publish_counters`,
+`park_confirmed`, `membership_now`, `locked_now`, `evidence`, `needed`,
+`successors`, `real`, `observe_needed`, `accuse_with_evidence`,
+`fence_step`, `fence_unit`, `r0`, `r0_effects`, `r1`, `r1_done`,
+`had_device`, `reclaim_step`, `audited`, `audit_block`,
+`containment_violated`, `barrier_holds`, `clear_step`, `unpin`,
+`seal_step`, `resume_step`, `ended_while_sealed`, `drop_ended`,
+`start_step`, `start_over`, `start_due`, `reserve_due`, `others_exist`,
+`reserve_work`, `reserve_step`, `take_hw`, `idle_table`.
+
+Notes, not run:
+
+- `node_start` stores the image and module in one field of the model,
+  `start_image` (`nodes.rs:257`), which nothing reads but
+  `resume_replacement`; a fresh start always builds from the boot layout
+  (`system.rs:805`). The `module` argument is judged
+  (`first_service_module`, any segment index passes) and then ignored.
+  Not a hole of the model, but the reference does not say what a fresh
+  start with module *m* runs.
+- `System::enter` drops a failed `Model::start` silently
+  (`system.rs:804-808`): the core stays `Entering` and the node `Starting`
+  until its start evidence. `Model::start` refuses only for the start-up
+  page, and the start-up page of a node slot outside the initial layout is
+  never checked at machine start-up (`layout` checks no start-up page at
+  all; `System::boot` checks those of the initial nodes by starting them).
+- `evidence` and `observe_needed` read the observations from the accusing
+  node's own beacon, but every condition (heartbeat unchanged, consumer
+  unchanged, `idle_until`) is read from the accused node's words, so a
+  hostile node cannot make the gate accept stale or stuck evidence against
+  a node that beats and consumes. I did not find a way around it.
+
+---
+
+## roles.rs
+
+### Finding 7. A `Report` whose next key does not advance keeps a rebuild asking for ever (likely exploitable: a unit role stops serving; the model panics)
+
+Attacker: a hostile kernel of one node that answers the new holder's
+`ReportAsk`.
+
+`model/src/roles.rs:678-684`, in `report_received`:
+
+```rust
+match next {
+    REPORT_END => {
+        rebuild.node = from + 1;
+        rebuild.key = 0;
+    }
+    key => rebuild.key = key,
+}
+```
+
+Any key but `REPORT_END` is taken, including one not above the key asked.
+`rebuild_step` (`roles.rs:452-480`) then asks the same node again from that
+key. Nothing bounds the number of asks, and a node that answers is never
+skipped (`roles.rs:440-444` skips only a node that no longer writes). While
+the rebuild runs, the new holder serves no request of the unit
+(`serves_role`, `units.rs:427-429`; requests are kept, `units.rs:535-537`),
+so every node's attaches, detaches and interrupt claims behind that unit
+wait. `rebuild.items` also grows by up to 28 items per answer
+(`roles.rs:676`) with no bound.
+
+Attack:
+1. Three nodes; node 1 holds the IOMMU and IOAPIC roles and is killed;
+   node 2 takes the roles over and rebuilds, asking node 0.
+2. Node 0 (hostile) writes every `Report` of its own ring to node 2 with
+   next key 0 (the key asked).
+3. Node 2 asks again, and again.
+
+Proof: `spoof::c10_a_report_whose_next_key_does_not_advance_stalls_the_rebuild_for_ever`
+(it fires one event at a time, rewrites node 0's ring after each, and moves
+the clock only to the next timer due). In the model, a kernel message and
+its answer take no time, so node 2's recovery reserve makes progress at
+the same instant for ever and the model's own bound fires:
+
+```
+panicked at model/src/nodes.rs:1974:9:
+the reserve makes progress for ever
+```
+
+An earlier variant that injected the forged answers itself panicked the
+same way. In a real machine the round trip takes time, so the rebuild
+does not stop the node: it just never ends, for as long as node 0 answers.
+Fix direction: a `Report` whose next key is not above the key asked (or
+that is not `REPORT_END`) ends that node's report, and is traced.
+
+Other functions of roles.rs read and found sound: `role_of`,
+`reserve_taken`, `role_claim`, `role_hand`, `vmx`, `hand_all_units`,
+`roles_step`, `roles_work`, `hand_step`, `handed` (the role is judged by
+`refused` first), `take_over_due`, `take_step`, `after_take`,
+`rebuilt_attach` (a reported device is kept only if its attach word reads
+*attached* with that root, so a hostile report cannot add another node's
+device), `serve_kept`, `items`, `report_asked` (the role index is checked
+by `refused` before it indexes `role_records`).
+
