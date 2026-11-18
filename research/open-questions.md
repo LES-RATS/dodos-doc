@@ -80,7 +80,7 @@ From the block "Project" of the proposed answers of 14 November 2026 (decisions 
 
 Verified 14 November 2026: the name `dodos` is taken on GitHub by a user account, so another organisation name is needed; `dodos.org` (2010) and `dodos.io` (2021) are taken; `dod-os.org` is free. The trademark is not verified.
 
-Repositories, all public: `github.com/Vehicoule/DodOS` (the system repository, created on 13 November 2026; it holds the WIT contracts, `verify`, the Nix environment and CI), `github.com/LES-RATS/dodos-kernel` (the kernel repository: `abi/`, and the reference model on pull request 3) and `github.com/LES-RATS/dodos-doc` (these documents). Organisation name: later.
+Repositories, all public: `github.com/LES-RATS/DodOS` (the system repository, created on 13 November 2026; it holds the WIT contracts, `verify`, the Nix environment and CI), `github.com/LES-RATS/dodos-kernel` (the kernel repository: `abi/`, and the reference model on pull request 3) and `github.com/LES-RATS/dodos-doc` (these documents). Organisation name: later.
 
 ### Licence and legal counsel
 
