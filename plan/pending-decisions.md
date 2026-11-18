@@ -424,7 +424,7 @@ Answers given by one owner on 16 November 2026 (recorded in the decision log as 
 
 **Question.** Do you merge now pull request 3 of the kernel repository (the reference model and the `abi/` crate, branch `model`) and pull request 5 (`abi/` under the Apache License 2.0, D-119)?
 
-**Where.** [progress.md](progress.md) line 90 (stale: it gives head `2afc901` and 985 tests); pull requests 3 and 5 of `Vehicoule/dodos-kernel`, both open on 16 November 2026. Checked: `abi/Cargo.toml` on branch `model` still says `license.workspace = true`, so it inherits the AGPL of the workspace, against D-119; on branch `abi-apache` it says `Apache-2.0`.
+**Where.** [progress.md](progress.md) line 90 (stale: it gives head `2afc901` and 985 tests); pull requests 3 and 5 of `LES-RATS/dodos-kernel`, both open on 16 November 2026. Checked: `abi/Cargo.toml` on branch `model` still says `license.workspace = true`, so it inherits the AGPL of the workspace, against D-119; on branch `abi-apache` it says `Apache-2.0`.
 
 **Options.**
 - **A. Merge both now**, PR 5 first, then PR 3 with its `abi/Cargo.toml` set to Apache-2.0. Gives: `main` holds the model the kernel is written against; each later pass is a smaller pull request. Costs: the next pass (for D-128 and D-129) changes `abi/` a lot, on `main`.
