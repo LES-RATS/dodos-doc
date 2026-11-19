@@ -28,3 +28,8 @@ done word
 # D-153: the object kind of `its_table` is 21; the suspend protocol stays a draft past D-153.
 `untyped_retype` of kind 17
 not normative until D-153
+# D-154: table chunks replace D-153's chunk split/merge; F16 removes the stale D-153 draft wording.
+split table
+a page leaf of a split chunk
+Until D-153
+
