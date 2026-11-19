@@ -25,3 +25,6 @@ never contended
 writing its state word *done*
 # D-152: the request record's state word replaced the done word.
 done word
+# D-153: the object kind of `its_table` is 21; the suspend protocol stays a draft past D-153.
+`untyped_retype` of kind 17
+not normative until D-153
