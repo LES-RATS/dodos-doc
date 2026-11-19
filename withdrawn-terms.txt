@@ -32,4 +32,8 @@ not normative until D-153
 split table
 a page leaf of a split chunk
 Until D-153
+# D-155: gate-call-sequence v4 replaces the generic register-save and first-act root-load prose on all three architectures.
+saves the interrupted registers in a gate area, and restores them from there
+saves the interrupted state in a gate area and restores it from there
+Each loads the kernel's TTBR1_EL1
 
