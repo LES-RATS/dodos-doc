@@ -1,0 +1,27 @@
+# Withdrawn terms (D-152). Each line that is not empty and does not start with
+# "#" is a fixed string that must no longer appear in architecture/kernel-interface.md
+# or architecture/kernel.md, outside the change log (the paragraph that starts
+# "**Revised, 16 November 2026") and the section "Changes for `abi/` and the model".
+# The decision log (decisions/README.md) is not checked. Each decision that withdraws
+# a term adds its line here, with the decision in a comment above it.
+# D-151 withdrew D-150's counters of invalidations.
+invalidation sequence
+unit sequence
+domain sequence
+# D-150 added G15 and G16.
+G1 to G14
+# D-151: the start of a core for a resume.
+reads *joining* for a node the caller starts
+# D-150: the gate composes remapping entries, per unit since D-151.
+iommu_write_remap(index, entry)
+# D-149: `parked` left the core beacon.
+`parked` and `started` (`u64` each) in the core beacon
+# D-151: the holder's trust.
+trusted by all for DMA
+# D-150: the observations left the node beacon.
+`observations[8]`
+# D-152: the gate lock and the state word of a core's request.
+never contended
+writing its state word *done*
+# D-152: the request record's state word replaced the done word.
+done word

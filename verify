@@ -9,3 +9,15 @@ cd "$(dirname "$0")"
 lychee --offline --include-fragments --no-progress \
   --exclude-path archive --exclude-path reviews \
   --exclude-path research/drafts .
+# Withdrawn terms (D-152): no line of the contract, outside its change log and
+# the section "Changes for `abi/` and the model", may contain a term listed in
+# withdrawn-terms.txt. Each decision that withdraws a term adds it there.
+awk -v F=withdrawn-terms.txt '
+  BEGIN { while ((getline l < F) > 0) if (l != "" && l !~ /^#/) p[++n] = l }
+  FNR == 1 { skip = 0 }
+  /^### Changes for `abi\/` and the model/ { skip = 1 }
+  /^## / { skip = 0 }
+  /^\*\*Revised, 16 November 2026/ { next }
+  !skip { for (i = 1; i <= n; i++) if (index($0, p[i])) { print FILENAME ":" FNR ": withdrawn term: " p[i]; bad = 1 } }
+  END { exit bad }
+' architecture/kernel-interface.md architecture/kernel.md
