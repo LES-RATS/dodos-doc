@@ -36,4 +36,8 @@ Until D-153
 saves the interrupted registers in a gate area, and restores them from there
 saves the interrupted state in a gate area and restores it from there
 Each loads the kernel's TTBR1_EL1
+# D-156: D-155 promoted GATE_PCID to x86-64 mechanism 1, and table untypeds have no clean mark.
+on x86-64 mechanism 1, a supervisor shadow-stack leaf
+on x86-64 mechanism 1, supervisor shadow-stack leaves
+which the clean mark may already have done
 
